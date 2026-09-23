@@ -77,3 +77,55 @@ class CorrelationsTest(testing.TestCase):
         self.assertEqual(config["axis"], -1)
         self.assertEqual(config["dtype"], "float32")
         self.assertEqual(config["name"], "concordance_correlation")
+
+    def test_pearson_zero_variance_whole_batch_is_forced_to_zero(self):
+        """A single, wholly-constant row: OPTION B forces the undefined
+        correlation to 0.0 (matching sklearn's r_regression(force_finite=
+        True) default and this file's own concordance_correlation), rather
+        than propagating NaN."""
+        y_true = np.array([[1.0, 1.0, 1.0]], dtype="float32")
+        y_pred = np.array([[0.1, 0.5, 0.9]], dtype="float32")
+        result = correlation_metrics.pearson_correlation(
+            y_true, y_pred, axis=-1
+        )
+        self.assertAllClose(result, [0.0])
+        self.assertFalse(np.isnan(np.array(result)).any())
+
+    def test_pearson_one_degenerate_row_diluted_not_poisoned(self):
+        """One constant row among otherwise-normal rows: OPTION B forces
+        that row's contribution to 0.0, so the aggregated batch mean is
+        the (real_row + 0.0) / 2 average -- diluted toward zero, but a
+        finite, computable number, and a later normal batch is NOT
+        poisoned (unlike Option A's NaN, which persists across
+        update_state calls once seen)."""
+        y_true_normal = np.array([[0.1, 0.5, 0.9]], dtype="float32")
+        y_pred_normal = np.array([[0.2, 0.4, 0.8]], dtype="float32")
+        y_true_degenerate = np.array([[2.0, 2.0, 2.0]], dtype="float32")
+        y_pred_degenerate = np.array([[1.9, 2.1, 2.0]], dtype="float32")
+
+        real_row_correlation = correlation_metrics.pearson_correlation(
+            y_true_normal, y_pred_normal, axis=-1
+        )
+
+        m = PearsonCorrelation(axis=-1, dtype="float32")
+        m.update_state(y_true_normal, y_pred_normal)
+        m.update_state(y_true_degenerate, y_pred_degenerate)
+        expected_diluted = np.array(real_row_correlation).mean() / 2
+        self.assertAllClose(m.result(), expected_diluted)
+        self.assertFalse(np.isnan(np.array(m.result())).any())
+
+        # A later, perfectly normal batch keeps moving the mean normally --
+        # no permanent poisoning.
+        m.update_state(y_true_normal, y_pred_normal)
+        self.assertFalse(np.isnan(np.array(m.result())).any())
+
+    def test_pearson_normal_variance_control_unchanged(self):
+        """Control: no degenerate rows at all -- OPTION B must not change
+        the ordinary-case numeric result versus the original
+        implementation (regression check against scipy.stats.pearsonr,
+        same fixture as test_pearson_function)."""
+        y_true, y_pred, _, pcc_expected = self._get_data()
+        result = correlation_metrics.pearson_correlation(
+            y_true, y_pred, axis=-1
+        )
+        self.assertAllClose(result, pcc_expected)
