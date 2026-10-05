@@ -1112,6 +1112,19 @@ class MathOpsCorrectnessTest(testing.TestCase):
         # Assert that the outputs are close
         self.assertAllClose(output_from_erf_op, expected_output, atol=1e-4)
 
+    @pytest.mark.skipif(
+        backend.backend() == "tensorflow",
+        reason="TensorFlow rejects integer input to erf and erfc.",
+    )
+    def test_erf_integer_input(self):
+        # Integer input is promoted to float, as `erfc` already does. The
+        # numpy backend previously cast the result back to the input dtype,
+        # truncating every value to 0.
+        x = np.array([-3, -2, -1, 0, 1, 2, 3], dtype="int32")
+        self.assertAllClose(
+            kmath.erf(x), scipy.special.erf(x.astype("float32")), atol=1e-4
+        )
+
     def test_erf_operation_dtype(self):
         # Test for float32 and float64 data types
         for dtype in ("float32", "float64"):
