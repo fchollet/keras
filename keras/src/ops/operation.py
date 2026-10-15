@@ -7,6 +7,7 @@ from keras.src import dtype_policies
 from keras.src import tree
 from keras.src.api_export import keras_export
 from keras.src.backend import KerasTensor
+from keras.src.backend.common import dtypes
 from keras.src.backend.common import remat
 from keras.src.backend.common.keras_tensor import any_symbolic_tensors
 from keras.src.backend.common.symbolic_scope import in_symbolic_scope
@@ -447,3 +448,39 @@ class Operation(KerasSaveable):
     def _post_untrack_variable(self, variable):
         """Can be overridden for per backend post untrack actions."""
         pass
+
+
+class ElementwiseUnaryOperation(Operation):
+    """Base class for elementwise unary operations.
+
+    Subclasses must specify `call_fn` as a class attribute.
+    Optionally, subclasses may specify `output_dtype` (e.g., `"bool"` for
+    predicates) or `promote_to_float = True` (for ops promoting integer/bool
+    inputs to floating-point). If neither is specified, the output dtype
+    matches the input tensor's dtype.
+    """
+
+    call_fn = None
+    output_dtype = None
+    preserves_sparse = False
+    promote_to_float = False
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        if cls.call_fn is None:
+            raise ValueError(f"Class '{cls.__name__}' must define `call_fn`.")
+        cls.call_fn = staticmethod(cls.call_fn)
+
+    def call(self, x):
+        return self.call_fn(x)
+
+    def compute_output_spec(self, x):
+        if self.output_dtype:
+            dtype = self.output_dtype
+        elif self.promote_to_float:
+            dtype = dtypes.promote_to_float_dtype(x.dtype)
+        else:
+            dtype = x.dtype
+        sparse = self.preserves_sparse and getattr(x, "sparse", False)
+        ragged = getattr(x, "ragged", False)
+        return KerasTensor(x.shape, dtype=dtype, sparse=sparse, ragged=ragged)
