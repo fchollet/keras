@@ -4111,6 +4111,9 @@ def unique(
     # Static size padding/truncation (branchless logic for graph mode safety)
     if size is not None:
         values_count = tf.shape(y)[axis]
+        if tf.is_tensor(size):
+            # A tensor `size` keeps its own dtype, so match `values_count`.
+            size = tf.cast(size, values_count.dtype)
 
         # 1. Truncate using gather
         truncate_size = tf.minimum(values_count, size)
