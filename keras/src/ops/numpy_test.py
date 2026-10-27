@@ -7395,12 +7395,49 @@ class NumpyOneInputOpsCorrectnessTest(testing.TestCase):
             knp.roll(x, np.array([1, 2]), axis=np.array([0, 1])),
             np.roll(x, [1, 2], axis=[0, 1]),
         )
+        # Tensor `shift` and `axis`.
+        self.assertAllClose(
+            knp.roll(x, ops.convert_to_tensor(1), axis=0),
+            np.roll(x, 1, axis=0),
+        )
+        self.assertAllClose(
+            knp.roll(x, 1, axis=ops.convert_to_tensor(1)),
+            np.roll(x, 1, axis=1),
+        )
+        self.assertAllClose(
+            knp.roll(
+                x,
+                ops.convert_to_tensor([1, 2]),
+                axis=ops.convert_to_tensor([0, 1]),
+            ),
+            np.roll(x, [1, 2], axis=[0, 1]),
+        )
+        self.assertAllClose(
+            knp.roll(x, ops.convert_to_tensor(1), axis=[0, 1]),
+            np.roll(x, 1, axis=[0, 1]),
+        )
         self.assertAllClose(knp.Roll(1)(x), np.roll(x, 1))
         self.assertAllClose(knp.Roll(1, axis=1)(x), np.roll(x, 1, axis=1))
         self.assertAllClose(knp.Roll(-1, axis=0)(x), np.roll(x, -1, axis=0))
         self.assertAllClose(
             knp.Roll(1, axis=(0, 1))(x), np.roll(x, 1, axis=(0, 1))
         )
+
+    @pytest.mark.skipif(
+        backend.backend() != "tensorflow",
+        reason="Tests `tf.function` with a dynamic `shift`.",
+    )
+    def test_roll_tf_function_dynamic_shift(self):
+        import tensorflow as tf
+
+        x = np.array([[1, 2, 3], [3, 2, 1]])
+
+        @tf.function(input_signature=[tf.TensorSpec([None], tf.int32)])
+        def roll_fn(shift):
+            return knp.roll(x, shift, axis=[0, 1])
+
+        self.assertAllClose(roll_fn([1]), np.roll(x, 1, axis=[0, 1]))
+        self.assertAllClose(roll_fn([1, 2]), np.roll(x, [1, 2], axis=[0, 1]))
 
     def test_round(self):
         x = np.array([[1.1, 2.5, 3.9], [3.2, 2.3, 1.8]])
