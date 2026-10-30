@@ -9900,10 +9900,10 @@ def logical_xor(x1, x2):
 
 class Corrcoef(Operation):
     def call(self, x):
-        return backend.ops.numpy.corrcoef(x)
+        return _corrcoef(x)
 
     def compute_output_spec(self, x):
-        dtype = standardize_dtype(getattr(x, "dtype", backend.floatx()))
+        dtype = standardize_dtype(getattr(x, "dtype", config.floatx()))
         if dtype == "int64":
             dtype = "float64"
         else:
@@ -9932,7 +9932,22 @@ def corrcoef(x):
     """
     if any_symbolic_tensors((x,)):
         return Corrcoef().symbolic_call(x)
-    return backend.ops.numpy.corrcoef(x)
+    return _corrcoef(x)
+
+
+def _corrcoef(x):
+    if not config._use_backend_agnostic_ops() and hasattr(
+        backend.ops.numpy, "corrcoef"
+    ):
+        return backend.ops.numpy.corrcoef(x)
+    x_cov = _cov(x)
+    if len(x_cov.shape) == 0:
+        return backend.ops.numpy.divide(x_cov, x_cov)
+    stddev = backend.ops.numpy.sqrt(backend.ops.numpy.diagonal(x_cov))
+    x_corr = backend.ops.numpy.divide(
+        x_cov, backend.ops.numpy.outer(stddev, stddev)
+    )
+    return backend.ops.numpy.clip(x_corr, -1, 1)
 
 
 class Correlate(Operation):
