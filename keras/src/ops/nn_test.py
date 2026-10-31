@@ -2767,6 +2767,12 @@ class NNOpsCorrectnessTest(testing.TestCase):
         self.assertAllClose(mean, expected_mean, atol=1e-5, rtol=1e-5)
         self.assertAllClose(variance, expected_variance, atol=1e-5, rtol=1e-5)
 
+        # Test a large mean relative to the spread of the values
+        x = np.array([10000, 10001, 10002, 10003], dtype=np.float32)
+        mean, variance = knn.moments(x, axes=[0])
+        self.assertAllClose(mean, 10001.5, atol=1e-5, rtol=1e-5)
+        self.assertAllClose(variance, 1.25, atol=1e-5, rtol=1e-5)
+
         # Test float16 which causes overflow
         x = np.array(
             [-741.0, 353.2, 1099.0, -1807.0, 502.8, -83.4, 333.5, -130.9],
