@@ -2307,6 +2307,36 @@ class ImageOpsCorrectnessTest(testing.TestCase):
         output = kimage.MapCoordinates(order, fill_mode)(input, coordinates)
         self.assertAllClose(output, expected)
 
+    @parameterized.product(
+        shape=[(1,), (1, 3), (3, 1), (1, 3, 1)], order=[0, 1]
+    )
+    def test_map_coordinates_singleton_axis(self, shape, order):
+        if backend.backend() != "torch":
+            self.skipTest("Regression for the Torch mirror index fixer.")
+
+        inputs = np.arange(1, math.prod(shape) + 1, dtype="float32").reshape(
+            shape
+        )
+        coordinates = np.tile(
+            np.array(
+                [-3.25, -1.25, 0.0, 0.25, 0.75, 1.0, 2.0, 3.25, 5.25],
+                dtype="float32",
+            ),
+            (len(shape), 1),
+        )
+        expected = _fixed_map_coordinates(
+            inputs, coordinates, order, fill_mode="mirror"
+        )
+
+        output = kimage.map_coordinates(
+            inputs, coordinates, order, fill_mode="mirror"
+        )
+        self.assertAllClose(output, expected)
+        output = kimage.MapCoordinates(order, fill_mode="mirror")(
+            inputs, coordinates
+        )
+        self.assertAllClose(output, expected)
+
     @parameterized.parameters(
         [
             (0, 0, 3, 3, None, None),

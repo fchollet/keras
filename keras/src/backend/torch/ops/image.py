@@ -757,6 +757,8 @@ def compute_homography_matrix(start_points, end_points):
 
 
 def _mirror_index_fixer(index, size):
+    if size == 1:
+        return torch.zeros_like(index)
     s = size - 1  # Half-wavelength of triangular wave
     # Scaled, integer-valued version of the triangular wave |x - round(x)|
     return torch.abs((index + s) % (2 * s) - s)
