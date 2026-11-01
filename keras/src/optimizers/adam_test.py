@@ -164,3 +164,41 @@ class AdamTest(testing.TestCase):
         x = keras.ops.ones((8, 5))
         y = keras.ops.zeros((8, 2))
         model.fit(x, y, verbose=0)
+
+    @pytest.mark.skipif(
+        backend.backend() != "tensorflow",
+        reason="Repeated IndexedSlices indices are a TensorFlow embedding path.",
+    )
+    def test_adam_repeated_embedding_indices(self):
+        # Regression for #24116: repeated sparse indices must be summed before
+        # Adam's second-moment square, or the update grows with √(repeats).
+        weights_after_one_step = []
+        for batch_size in (1, 16, 256):
+            model = keras.Sequential(
+                [
+                    keras.Input((1,), dtype="int32"),
+                    keras.layers.Embedding(
+                        3, 1, embeddings_initializer="ones"
+                    ),
+                    keras.layers.Flatten(),
+                ]
+            )
+            model.compile(optimizer="adam", loss="mse", jit_compile=False)
+            model.fit(
+                np.zeros((batch_size, 1), dtype="int32"),
+                np.zeros((batch_size, 1), dtype="float32"),
+                batch_size=batch_size,
+                epochs=1,
+                shuffle=False,
+                verbose=0,
+            )
+            weights_after_one_step.append(
+                float(model.layers[0].get_weights()[0][0, 0])
+            )
+
+        # Mean loss/grad are independent of identical repeats; the embedding
+        # weight after one Adam step must match the batch_size=1 update.
+        for weight in weights_after_one_step[1:]:
+            self.assertAllClose(
+                weight, weights_after_one_step[0], atol=1e-5, rtol=1e-5
+            )

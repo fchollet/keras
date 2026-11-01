@@ -129,6 +129,31 @@ class TFOptimizer(KerasAutoTrackable, base_optimizer.BaseOptimizer):
             variables,
         )
 
+    def _deduplicate_sparse_grad(self, grads):
+        """Sum values for duplicated indices in `tf.IndexedSlices` grads.
+
+        Adaptive optimizers (Adam, etc.) square gradients. With repeated
+        indices that must mean ``(sum g_i)**2``, not ``sum(g_i**2)``. See
+        #24116 and the Keras 2 fix in commit 2af5d686.
+        """
+        processed_grads = []
+        for grad in grads:
+            if isinstance(grad, tf.IndexedSlices):
+                unique_indices, new_index_positions = tf.unique(grad.indices)
+                summed_values = tf.math.unsorted_segment_sum(
+                    grad.values,
+                    new_index_positions,
+                    tf.shape(unique_indices)[0],
+                )
+                processed_grads.append(
+                    tf.IndexedSlices(
+                        summed_values, unique_indices, grad.dense_shape
+                    )
+                )
+            else:
+                processed_grads.append(grad)
+        return processed_grads
+
     def _backend_update_step(self, grads, trainable_variables, learning_rate):
         trainable_variables = [
             v.value if isinstance(v, backend.Variable) else v
@@ -136,6 +161,12 @@ class TFOptimizer(KerasAutoTrackable, base_optimizer.BaseOptimizer):
         ]
         grads_and_vars = list(zip(grads, trainable_variables))
         grads_and_vars = self._all_reduce_sum_gradients(grads_and_vars)
+        # Dedup after aggregation so MirroredStrategy overlaps and in-replica
+        # repeats are combined before update_step.
+        grads = self._deduplicate_sparse_grad(
+            [grad for grad, _ in grads_and_vars]
+        )
+        grads_and_vars = list(zip(grads, [var for _, var in grads_and_vars]))
         tf.__internal__.distribute.interim.maybe_merge_call(
             self._distributed_tf_update_step,
             self._distribution_strategy,
