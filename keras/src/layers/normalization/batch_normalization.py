@@ -319,7 +319,9 @@ class BatchNormalization(Layer):
 
         reduction_axes = list(range(len(input_shape)))
         del reduction_axes[self.axis]
-        self._reduction_axes = reduction_axes
+        # torch compilation will cast list to TrackedList and
+        # force unnecessary graph break if used for reduction directly
+        self._reduction_axes = tuple(reduction_axes)
 
     def compute_output_shape(self, input_shape):
         if isinstance(self.axis, int):
@@ -437,11 +439,10 @@ class BatchNormalization(Layer):
         return {**base_config, **config}
 
     def _moments(self, inputs, mask):
-        reduction_axes = list(self._reduction_axes)
         if mask is None:
             return ops.moments(
                 inputs,
-                axes=reduction_axes,
+                axes=self._reduction_axes,
                 synchronized=self.synchronized,
             )
 
@@ -452,12 +453,12 @@ class BatchNormalization(Layer):
 
         masked_input_sum = ops.sum(
             masked_inputs,
-            reduction_axes,
+            self._reduction_axes,
             keepdims=True,
         )
         sum_of_weights = ops.sum(
             ops.cast(mask_broadcasted, inputs.dtype),
-            reduction_axes,
+            self._reduction_axes,
             keepdims=True,
         )
         mean = masked_input_sum / (sum_of_weights + backend.epsilon())
@@ -470,7 +471,7 @@ class BatchNormalization(Layer):
         del difference
         weighted_distsq = ops.sum(
             squared_difference,
-            reduction_axes,
+            self._reduction_axes,
             keepdims=True,
         )
         del squared_difference
