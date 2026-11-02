@@ -371,6 +371,9 @@ class Operation(KerasSaveable):
     def __repr__(self):
         return f"<Operation name={self.name}>"
 
+    # TODO: expose a public accessor for the inputs and outputs of every
+    # call. `input` and `output` can only report the first one, so callers
+    # that need the others have to keep their own references.
     @property
     def input(self):
         """Retrieves the input tensor(s) of a symbolic operation.
@@ -383,9 +386,6 @@ class Operation(KerasSaveable):
         though the layer has several inputs. There is no public accessor
         for the inputs of the other calls. Keep a reference to the
         inputs used in each call instead.
-
-        `layer._inbound_nodes[i].input_tensors` exposes the inputs of the
-        `i`-th call, but it is a private API.
 
         Returns:
             Input tensor or list of input tensors.
@@ -419,9 +419,6 @@ class Operation(KerasSaveable):
         # `outputs_b`. Use the returned tensors directly instead.
         model = keras.Model([inputs_a, inputs_b], [outputs_a, outputs_b])
         ```
-
-        `layer._inbound_nodes[i].output_tensors` exposes the outputs of the
-        `i`-th call, but it is a private API.
 
         Returns:
             Output tensor or list of output tensors.
