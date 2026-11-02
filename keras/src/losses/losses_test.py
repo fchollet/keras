@@ -21,6 +21,9 @@ from keras.src.models import Functional
 class MeanSquaredErrorTest(testing.TestCase):
     def test_config(self):
         self.run_class_serialization_test(losses.MeanSquaredError(name="mymse"))
+        self.run_class_serialization_test(
+            losses.MeanSquaredError(name="mymse", dtype="bfloat16")
+        )
 
     def test_base_function_reduction(self):
         mse_fn = losses.mean_squared_error
@@ -1016,6 +1019,9 @@ class BinaryCrossentropyTest(testing.TestCase):
     def test_config(self):
         self.run_class_serialization_test(
             losses.BinaryCrossentropy(name="bce", axis=-1)
+        )
+        self.run_class_serialization_test(
+            losses.BinaryCrossentropy(name="bce", axis=-1, dtype="float16")
         )
 
     def test_all_correct_unweighted(self):
