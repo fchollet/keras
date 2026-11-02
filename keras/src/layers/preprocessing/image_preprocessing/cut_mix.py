@@ -33,7 +33,9 @@ class CutMix(BaseImagePreprocessingLayer):
             sizes (patches covering almost none or almost all of the image)
             more likely; a larger factor concentrates the patch sizes around
             half of the image. The CutMix paper uses `alpha = 1` (a uniform
-            mixing weight), i.e. `factor=(1.0, 1.0)`. Defaults to 1.
+            mixing weight), i.e. `factor=(1.0, 1.0)`. Defaults to 1, which
+            samples `alpha` uniformly between 0 and 1 (not the paper's
+            setting).
         seed: Integer. Used to create a random seed.
 
     Example:
