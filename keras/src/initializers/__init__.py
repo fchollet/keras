@@ -2,9 +2,10 @@ import inspect
 
 import numpy as np
 
-from keras.src import backend
 from keras.src import ops
 from keras.src.api_export import keras_export
+from keras.src.backend.common import standardize_dtype
+from keras.src.backend.common import standardize_shape
 from keras.src.initializers.constant_initializers import STFT
 from keras.src.initializers.constant_initializers import Constant
 from keras.src.initializers.constant_initializers import Identity
@@ -132,17 +133,14 @@ def get(identifier):
     if isinstance(identifier, dict):
         obj = deserialize(identifier)
     elif isinstance(identifier, str):
-        config = {"class_name": str(identifier), "config": {}}
-        obj = deserialize(config)
+        obj = ALL_OBJECTS_DICT.get(identifier, None)
     elif ops.is_tensor(identifier) or isinstance(
         identifier, (np.generic, np.ndarray)
     ):
 
         def initialize_fn(shape, dtype=None):
-            dtype = backend.standardize_dtype(dtype)
-            if backend.standardize_shape(shape) != backend.standardize_shape(
-                identifier.shape
-            ):
+            dtype = standardize_dtype(dtype)
+            if standardize_shape(shape) != standardize_shape(identifier.shape):
                 raise ValueError(
                     f"Expected `shape` to be {identifier.shape} for direct "
                     f"tensor as initializer. Received shape={shape}"

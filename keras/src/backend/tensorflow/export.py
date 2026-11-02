@@ -5,7 +5,7 @@ from keras.src.export.saved_model_export_archive import (
 )
 
 
-class TFExportArchive(BaseSavedModelExportArchive):
+class SavedModelExportArchive(BaseSavedModelExportArchive):
     """TensorFlow backend implementation of SavedModel export archive."""
 
     def _backend_track_layer(self, layer):

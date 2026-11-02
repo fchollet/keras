@@ -1,7 +1,6 @@
-from keras.src import backend
 from keras.src.api_export import keras_export
+from keras.src.backend.common import standardize_dtype
 from keras.src.dtype_policies import dtype_policy
-from keras.src.dtype_policies.dtype_policy import QUANTIZATION_MODES
 from keras.src.dtype_policies.dtype_policy import AWQDTypePolicy
 from keras.src.dtype_policies.dtype_policy import DTypePolicy
 from keras.src.dtype_policies.dtype_policy import FloatDTypePolicy
@@ -105,7 +104,7 @@ def get(identifier):
         else:
             return DTypePolicy(identifier)
     try:
-        return DTypePolicy(backend.standardize_dtype(identifier))
+        return DTypePolicy(standardize_dtype(identifier))
     except:
         raise ValueError(
             "Cannot interpret `dtype` argument. Expected a string "

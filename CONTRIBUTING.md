@@ -273,22 +273,25 @@ is a minimal version of `vsplit` from `keras/src/ops/numpy.py`.
 ### Testing both paths
 
 Both code paths must be tested. Parameterize the test with the
-`BACKEND_AGNOSTIC_OPS` constant and always reset the flag in a `finally` block.
+`BACKEND_AGNOSTIC_OPS` constant and register a reset of the flag with
+`self.addCleanup` immediately after setting it.
 
 ```python
 @parameterized.named_parameters(named_product(BACKEND_AGNOSTIC_OPS))
 def test_my_op(self, backend_agnostic_ops):
     backend.config._set_use_backend_agnostic_ops(backend_agnostic_ops)
-    try:
-        x = np.array([1.0, 2.0, 3.0])
-        self.assertAllClose(knp.my_op(x), np.my_op(x))
-        self.assertAllClose(knp.MyOp()(x), np.my_op(x))
-        ...
-    finally:
-        backend.config._set_use_backend_agnostic_ops(False)
+    self.addCleanup(backend.config._set_use_backend_agnostic_ops, False)
+    x = np.array([1.0, 2.0, 3.0])
+    self.assertAllClose(knp.my_op(x), np.my_op(x))
+    self.assertAllClose(knp.MyOp()(x), np.my_op(x))
+    ...
 ```
 
-[Here](https://github.com/keras-team/keras/blob/5edcf00a9e818838988c8c0cf45a79e279851803/keras/src/ops/numpy_test.py#L7327-L7366)
+The cleanup runs after the test finishes, even if an assertion fails, so the
+flag never leaks into subsequent tests. Prefer `self.addCleanup` over a
+`try`/`finally` block: it keeps the test body unindented.
+
+[Here](https://github.com/keras-team/keras/blob/f3680413cbfb503b43ecb64818ccae1df5b7096c/keras/src/ops/numpy_test.py#L7454-L7491)
 is an example of testing both code paths for `vsplit`.
 
 You can also test the fallback across an entire test run by setting the

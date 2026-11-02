@@ -1,4 +1,4 @@
-from keras.src import ops
+from keras.src import backend
 from keras.src.api_export import keras_export
 from keras.src.layers.merging.base_merge import Merge
 
@@ -45,7 +45,7 @@ class Subtract(Merge):
                 "A `Subtract` layer should be called on exactly 2 inputs. "
                 f"Received: inputs={inputs}"
             )
-        return ops.subtract(inputs[0], inputs[1])
+        return backend.ops.numpy.subtract(inputs[0], inputs[1])
 
 
 @keras_export("keras.layers.subtract")

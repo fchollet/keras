@@ -8,7 +8,6 @@ policy-string codec and the block-size resolution.
 
 from keras.src.dtype_policies.dtype_policy import Int4DTypePolicy
 from keras.src.dtype_policies.dtype_policy import QuantizedDTypePolicy
-from keras.src.dtype_policies.dtype_policy_map import DTypePolicyMap
 from keras.src.quantizers.modes.common import GeometryDispatchStrategy
 from keras.src.quantizers.modes.int4.lookup import Int4LookupHandlers
 from keras.src.quantizers.modes.int4.projection import Int4ProjectionHandlers
@@ -45,21 +44,12 @@ class Int4Strategy(
         """
         if isinstance(config, Int4QuantizationConfig):
             return config.block_size
-        elif isinstance(layer.dtype_policy, Int4DTypePolicy):
-            block_size = layer.dtype_policy.block_size
+        policy = layer._own_dtype_policy
+        if isinstance(policy, Int4DTypePolicy):
             # Convert -1 to None for consistency
-            return None if block_size == -1 else block_size
-        elif isinstance(layer.dtype_policy, DTypePolicyMap):
-            policy = layer.dtype_policy[layer.path]
-            if isinstance(policy, Int4DTypePolicy):
-                block_size = policy.block_size
-                return None if block_size == -1 else block_size
-            # Fall back to None for legacy QuantizedDTypePolicy
-            return None
-        else:
-            # For backwards compatibility with models that don't have
-            # Int4DTypePolicy (legacy per-channel mode)
-            return None
+            return None if policy.block_size == -1 else policy.block_size
+        # A legacy bare "int4" policy (no `Int4DTypePolicy`) is per-channel.
+        return None
 
     def policy_from_string(self, mode_str, source_name):
         # Legacy bare "int4" policies carry no block size and stay generic
@@ -70,9 +60,12 @@ class Int4Strategy(
             return QuantizedDTypePolicy(mode_str, source_name)
 
     def config_from_policy(self, policy):
+        # The config builds what a layer built from the policy name holds,
+        # so a legacy bare "int4" name, which a build reads as per-channel,
+        # gives a per-channel config.
         if isinstance(policy, Int4DTypePolicy):
             return Int4QuantizationConfig(block_size=policy.block_size)
-        return Int4QuantizationConfig()
+        return Int4QuantizationConfig(block_size=-1)
 
     def policy_suffix(self, layer, config):
         # Include block_size in policy name for sub-channel quantization.

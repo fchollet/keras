@@ -26,15 +26,17 @@ def standardize_tuple(value, n, name, allow_zero=False):
             raise ValueError(error_msg)
         if len(value_tuple) != n:
             raise ValueError(error_msg)
+        converted_values = []
         for single_value in value_tuple:
             try:
-                int(single_value)
+                converted_values.append(int(single_value))
             except (ValueError, TypeError):
                 error_msg += (
                     f"including element {single_value} of "
                     f"type {type(single_value)}"
                 )
                 raise ValueError(error_msg)
+        value_tuple = tuple(converted_values)
 
     if allow_zero:
         unqualified_values = {v for v in value_tuple if v < 0}

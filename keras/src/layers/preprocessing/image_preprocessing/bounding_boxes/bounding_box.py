@@ -218,8 +218,8 @@ class BoundingBox:
         transformed_points = ops.numpy.einsum(
             "bnxy,byz->bnxz", points, transposed_matrix
         )
-        boxes_min = ops.numpy.amin(transformed_points, axis=2)
-        boxes_max = ops.numpy.amax(transformed_points, axis=2)
+        boxes_min = ops.numpy.min(transformed_points, axis=2)
+        boxes_max = ops.numpy.max(transformed_points, axis=2)
         outputs = ops.numpy.concatenate([boxes_min, boxes_max], axis=-1)
         return outputs
 

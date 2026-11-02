@@ -14,6 +14,7 @@ from keras.src import ops
 from keras.src import quantizers
 from keras.src import saving
 from keras.src import testing
+from keras.src.backend.common import standardize_dtype
 from keras.src.quantizers.awq_config import AWQConfig
 from keras.src.quantizers.gptq_config import GPTQConfig
 from keras.src.quantizers.quantization_config import Int4QuantizationConfig
@@ -54,9 +55,7 @@ class EmbeddingTest(test_case.TestCase):
         layer.quantize(mode, config=config)
 
         # Verify weights are quantized
-        self.assertEqual(
-            backend.standardize_dtype(layer._embeddings.dtype), "int8"
-        )
+        self.assertEqual(standardize_dtype(layer._embeddings.dtype), "int8")
         self.assertTrue(hasattr(layer, "embeddings_scale"))
 
         # Verify call works
@@ -401,11 +400,9 @@ class EmbeddingTest(test_case.TestCase):
         # Verify the dtype of the weights.
         # The embeddings's dtype is int8, despite the int4 quantization, because
         # we pack the int4 values into int8.
+        self.assertEqual(standardize_dtype(layer._embeddings.dtype), "int8")
         self.assertEqual(
-            backend.standardize_dtype(layer._embeddings.dtype), "int8"
-        )
-        self.assertEqual(
-            backend.standardize_dtype(layer.embeddings_scale.dtype),
+            standardize_dtype(layer.embeddings_scale.dtype),
             layer.variable_dtype,
         )
 
@@ -493,7 +490,7 @@ class EmbeddingTest(test_case.TestCase):
 
     @parameterized.named_parameters(
         ("int8", "int8_from_float32", 2),
-        ("int4", "int4_from_float32", 4),  # embeddings + scale + zero
+        ("int4", "int4_from_float32", 2),  # embeddings + scale
     )
     def test_quantize_by_setting_dtype_policy(
         self, policy, expected_num_variables
@@ -835,7 +832,10 @@ class EmbeddingTest(test_case.TestCase):
         layer.quantize("int4", config=config)
 
         # Verify block_size is stored
-        self.assertEqual(layer._int4_block_size, block_size)
+        self.assertEqual(
+            layer._quantized_weight().scheme.group_size,
+            None if block_size in (None, -1) else block_size,
+        )
 
         # Verify embeddings_scale shape
         if block_size is None or block_size == -1:
@@ -993,7 +993,7 @@ class EmbeddingTest(test_case.TestCase):
         layer.quantize("int4", config=config)
 
         # Verify g_idx is created
-        self.assertTrue(hasattr(layer, "g_idx"))
+        self.assertIsNotNone(layer.g_idx)
 
         # Verify g_idx shape (output_dim for embedding)
         self.assertEqual(layer.g_idx.shape, (output_dim,))
@@ -1017,7 +1017,7 @@ class EmbeddingTest(test_case.TestCase):
         layer.quantize("int4", config=config)
 
         # Verify g_idx is NOT created for per-channel
-        self.assertFalse(hasattr(layer, "g_idx"))
+        self.assertIsNone(layer.g_idx)
 
     @pytest.mark.skipif(
         testing.tensorflow_uses_gpu(), reason="Segfault on Tensorflow GPU"
@@ -1047,7 +1047,7 @@ class EmbeddingTest(test_case.TestCase):
 
         # Verify g_idx is preserved
         loaded_layer = loaded_model.layers[0]
-        self.assertTrue(hasattr(loaded_layer, "g_idx"))
+        self.assertIsNotNone(loaded_layer.g_idx)
         self.assertAllClose(loaded_layer.g_idx, g_idx_before)
 
         # Verify outputs match
@@ -1087,8 +1087,8 @@ class EmbeddingTest(test_case.TestCase):
             v_cfg = vars_cfg[name]
             self.assertEqual(tuple(v_str.shape), tuple(v_cfg.shape))
             self.assertEqual(
-                backend.standardize_dtype(v_str.dtype),
-                backend.standardize_dtype(v_cfg.dtype),
+                standardize_dtype(v_str.dtype),
+                standardize_dtype(v_cfg.dtype),
             )
             self.assertAllClose(v_str, v_cfg)
 
@@ -1111,8 +1111,8 @@ class EmbeddingTest(test_case.TestCase):
             "int4", config=Int4QuantizationConfig(block_size=block_size)
         )
         self.assertEqual(tuple(layer.embeddings_scale.shape), (32,))
-        self.assertFalse(hasattr(layer, "embeddings_zero"))
-        self.assertFalse(hasattr(layer, "g_idx"))
+        self.assertIsNone(layer.embeddings_zero)
+        self.assertIsNone(layer.g_idx)
         self.assertEqual(layer.dtype_policy.name, "int4/-1_from_float32")
 
     @parameterized.named_parameters(
@@ -1139,18 +1139,16 @@ class EmbeddingTest(test_case.TestCase):
         self.assertEqual(layer.quantization_mode, "int4")
         if per_channel:
             self.assertEqual(tuple(layer.embeddings_scale.shape), (input_dim,))
-            self.assertFalse(hasattr(layer, "g_idx"))
+            self.assertIsNone(layer.g_idx)
         else:
             block_size = int(block_token)
             n_groups = math.ceil(output_dim / block_size)
             self.assertEqual(
                 tuple(layer.embeddings_scale.shape), (input_dim, n_groups)
             )
-            self.assertTrue(hasattr(layer, "g_idx"))
+            self.assertIsNotNone(layer.g_idx)
             self.assertEqual(tuple(layer.g_idx.shape), (output_dim,))
-        self.assertEqual(
-            backend.standardize_dtype(layer._embeddings.dtype), "int8"
-        )
+        self.assertEqual(standardize_dtype(layer._embeddings.dtype), "int8")
 
         x = np.array([[1, 2, 3], [4, 5, 6]], dtype="int32")
         self.assertEqual(tuple(layer(x).shape), (2, 3, output_dim))

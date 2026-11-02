@@ -100,6 +100,25 @@ class SwapEMAWeightsTest(testing.TestCase):
         )
 
     @pytest.mark.requires_trainable_backend
+    def test_swap_ema_weights_on_predict(self):
+        model = self._get_compiled_model()
+        # the first step sets the EMA weights to the trained weights, so a
+        # second step is needed to make them differ
+        model.train_on_batch(self.x_train, self.y_train)
+        model.train_on_batch(self.x_train, self.y_train)
+        weights = model.get_weights()
+        y_pred = model.predict(self.x_train)
+
+        y_pred_ema = model.predict(
+            self.x_train, callbacks=[callbacks.SwapEMAWeights()]
+        )
+        # prediction uses the EMA weights
+        self.assertNotAllClose(y_pred_ema, y_pred)
+        # the model weights are restored after prediction
+        for weight, new_weight in zip(weights, model.get_weights()):
+            self.assertAllClose(new_weight, weight)
+
+    @pytest.mark.requires_trainable_backend
     def test_swap_ema_weights_on_epoch(self):
         # using SwapEMAWeights together with ModelCheckpoint
         model = self._get_compiled_model()

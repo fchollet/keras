@@ -1,5 +1,7 @@
 import os
 import pickle
+import zipfile
+from unittest import mock
 
 import numpy as np
 
@@ -50,3 +52,15 @@ class LoadNpzTest(testing.TestCase):
         with self.assertRaisesRegex(pickle.UnpicklingError, "Refusing"):
             npz_utils.load_npz(path)
         self.assertFalse(os.path.exists(marker))
+
+    def test_rejects_decompression_bomb_member(self):
+        path = os.path.join(self.get_temp_dir(), "bomb.npz")
+        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("x.npy", b"\0" * 200_000)
+
+        with (
+            mock.patch.object(npz_utils, "_NPZ_MEMBER_BOMB_FLOOR_BYTES", 64),
+            mock.patch.object(npz_utils, "_NPZ_MEMBER_MAX_EXPANSION", 10),
+        ):
+            with self.assertRaisesRegex(ValueError, "decompression bomb"):
+                npz_utils.load_npz(path)

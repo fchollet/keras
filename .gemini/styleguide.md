@@ -236,10 +236,12 @@ Flag the following in the diff:
   dispatch and the fallback.
 - **Only one path tested**: the test is not parameterized with
   `@parameterized.named_parameters(named_product(BACKEND_AGNOSTIC_OPS))`.
-- **Leaked test flag**: a test calls `_set_use_backend_agnostic_ops(True)`
-  without restoring it with `_set_use_backend_agnostic_ops(False)` in a
-  `finally` block. A failing assertion then silently changes the behavior of
-  every subsequent test in the process.
+- **Leaked test flag**: a test calls `_set_use_backend_agnostic_ops(...)`
+  without immediately registering
+  `self.addCleanup(backend.config._set_use_backend_agnostic_ops, False)`.
+  A failing assertion then silently changes the behavior of every subsequent
+  test in the process. Also flag new tests that reset the flag in a
+  `try`/`finally` block and suggest `self.addCleanup` instead.
 - **Public `ops` API in the fallback**: inside `keras/src/ops/`, the fallback
   must call backend ops directly — `backend.ops.<op>` for core ops (e.g.
   `backend.ops.cast`) and `backend.ops.<module>.<op>` otherwise (e.g.

@@ -40,8 +40,9 @@ class Variable:
             to `"none"`.
         name: Optional. A unique name for the variable. Automatically generated
             if not set.
-        layout: Optional. Sharding layout for the variable. Can be a
-            `keras.distribution.TensorLayout` or a backend-specific layout.
+        layout: Optional. Sharding layout for the variable. Either a
+            `keras.distribution.TensorLayout` with its `device_mesh` set, or a
+            backend-specific layout.
         kwargs: Additional backend-specific keyword arguments.
 
     Attributes:
@@ -141,6 +142,15 @@ class Variable:
             )
         if synchronization is None:
             synchronization = "none"
+        if layout is not None:
+            from keras.src.distribution.distribution_lib import TensorLayout
+
+            if isinstance(layout, TensorLayout) and layout.device_mesh is None:
+                raise ValueError(
+                    "Argument `layout` must have `device_mesh` set. "
+                    f"Received: layout={layout}"
+                )
+
         self._name = name
         parent_path = current_path()
         if parent_path:
@@ -315,7 +325,7 @@ class Variable:
             dtype = autocast_scope.dtype
         else:
             dtype = self._dtype
-        return backend.standardize_dtype(dtype)
+        return standardize_dtype(dtype)
 
     @property
     def shape(self):
@@ -602,6 +612,16 @@ def standardize_shape(shape):
             raise ValueError(f"Cannot convert '{shape}' to a shape.")
         if config.backend() == "tensorflow":
             if isinstance(shape, tf.TensorShape):
+                if shape.rank is None:
+                    raise ValueError(
+                        "Tensors with unknown rank are not supported. "
+                        f"Received a tensor with shape: {shape}. This "
+                        "commonly happens with `tf.numpy_function` or "
+                        "`tf.py_function` in a `tf.data` pipeline, which "
+                        "discard static shape information. Specify the "
+                        "shape explicitly, e.g. with `tensor.set_shape(...)` "
+                        "or `tf.ensure_shape(tensor, shape)`."
+                    )
                 # `tf.TensorShape` may contain `Dimension` objects.
                 # We need to convert the items in it to either int or `None`
                 shape = shape.as_list()

@@ -5,6 +5,7 @@ import pytest
 import torch
 import torch.multiprocessing as mp
 from absl.testing import parameterized
+from torch._dynamo.utils import counters
 
 from keras.src import backend
 from keras.src import layers
@@ -92,6 +93,62 @@ class TorchTrainerDistributionTest(TorchDistributedTestMixin, testing.TestCase):
         y_pred_batch = model.predict_on_batch(x)
         self.assertEqual(y_pred_batch.shape, (10, 1))
 
+    def test_jit_compile_with_data_parallel(self):
+        mesh = DeviceMesh(
+            shape=(1,),
+            axis_names=["batch"],
+            devices=np.array([dist_lib.list_devices()[0]]),
+        )
+        distribution = DataParallel(device_mesh=mesh)
+        x = np.random.rand(16, 10).astype("float32")
+        y = np.random.rand(16, 1).astype("float32")
+        reference = SimpleModel()
+        reference(x)
+        initial_weights = reference.get_weights()
+
+        trained_weights = []
+        for jit_compile in (False, True):
+            torch._dynamo.reset()
+            counters.clear()
+            with distribution.scope():
+                model = SimpleModel()
+                model(x)
+                model.set_weights(initial_weights)
+                model.compile(
+                    optimizer=optimizers.SGD(0.1),
+                    loss="mse",
+                    metrics=["mae"],
+                    jit_compile=jit_compile,
+                )
+                model.fit(
+                    x, y, epochs=2, batch_size=4, shuffle=False, verbose=0
+                )
+            trained_weights.append(model.get_weights())
+
+        # TorchDynamo compiled the steps instead of skipping every frame.
+        self.assertGreater(counters["stats"]["unique_graphs"], 0)
+        for eager_weight, jit_weight in zip(*trained_weights):
+            self.assertAllClose(eager_weight, jit_weight, atol=1e-6)
+
+    def test_jit_compile_with_model_parallel_runs_eagerly(self):
+        mesh = DeviceMesh(
+            shape=(1,),
+            axis_names=["batch"],
+            devices=np.array([dist_lib.list_devices()[0]]),
+        )
+        layout_map = LayoutMap(mesh)
+        layout_map[".*dense.*kernel"] = (None, "batch")
+        distribution = ModelParallel(layout_map=layout_map)
+        x = np.ones((8, 10), dtype="float32")
+        y = np.ones((8, 1), dtype="float32")
+
+        with distribution.scope():
+            model = SimpleModel()
+            model.compile(optimizer="sgd", loss="mse", jit_compile=True)
+            with pytest.warns(UserWarning, match="`ModelParallel`"):
+                history = model.fit(x, y, epochs=1, batch_size=4, verbose=0)
+        self.assertLen(history.history["loss"], 1)
+
     def test_metrics_distributed_multi_process(self):
         # Use real multi-process distribution to hit the metrics logic
         mp.spawn(
@@ -177,3 +234,178 @@ def _distributed_metrics_worker(rank):
         raise RuntimeError(f"Metrics missing from results: {results}")
 
     torch.distributed.destroy_process_group()
+
+
+@pytest.mark.skipif(
+    backend.backend() != "torch", reason="Requires torch backend"
+)
+class TorchTrainerJitCompileTest(testing.TestCase):
+    def test_jit_compile_with_frozen_weights(self):
+        model = SimpleModel()
+        x = np.ones((8, 10), dtype="float32")
+        y = np.ones((8, 1), dtype="float32")
+        model(x)
+        # Manually set requires_grad = False on one of the trainable weight
+        # tensors (kernel is frozen, but bias is still trainable)
+        model.dense.kernel.value.requires_grad = False
+
+        model.compile(
+            optimizer=optimizers.Adam(),
+            loss="mse",
+            jit_compile=True,
+        )
+        history = model.fit(x, y, epochs=1, batch_size=4, verbose=0)
+        self.assertIn("loss", history.history)
+
+    def test_jit_compile_with_all_weights_frozen(self):
+        model = SimpleModel()
+        x = np.ones((8, 10), dtype="float32")
+        y = np.ones((8, 1), dtype="float32")
+        model(x)
+        model.dense.kernel.value.requires_grad = False
+        model.dense.bias.value.requires_grad = False
+
+        model.compile(
+            optimizer=optimizers.Adam(),
+            loss="mse",
+            jit_compile=True,
+        )
+        with self.assertRaises(ValueError):
+            model.fit(x, y, epochs=1, batch_size=4, verbose=0)
+
+    def test_jit_compile_with_detached_loss(self):
+        class DetachedLossModel(models.Model):
+            def __init__(self):
+                super().__init__()
+                self.dense = layers.Dense(1)
+
+            def call(self, x):
+                return self.dense(x)
+
+            def compute_loss(
+                self,
+                x=None,
+                y=None,
+                y_pred=None,
+                sample_weight=None,
+                training=True,
+            ):
+                return torch.tensor(1.0)
+
+        model = DetachedLossModel()
+        x = np.ones((8, 10), dtype="float32")
+        y = np.ones((8, 1), dtype="float32")
+        model.compile(
+            optimizer=optimizers.Adam(),
+            jit_compile=True,
+        )
+        with self.assertRaises(ValueError):
+            model.fit(x, y, epochs=1, batch_size=4, verbose=0)
+
+    def test_jit_compile_with_train_step_calling_backward(self):
+        class BackwardModel(SimpleModel):
+            def train_step(self, data):
+                x, y = data
+                self.zero_grad()
+                y_pred = self(x, training=True)
+                loss = self.compute_loss(x=x, y=y, y_pred=y_pred)
+                loss.backward()
+                trainable_weights = self.trainable_weights[:]
+                gradients = [v.value.grad for v in trainable_weights]
+                with torch.no_grad():
+                    self.optimizer.apply(gradients, trainable_weights)
+                return {"loss": loss.detach()}
+
+        model = BackwardModel()
+        x = np.ones((8, 10), dtype="float32")
+        y = np.ones((8, 1), dtype="float32")
+        model.compile(
+            optimizer=optimizers.Adam(),
+            loss="mse",
+            jit_compile=True,
+        )
+        history = model.fit(x, y, epochs=2, batch_size=4, verbose=0)
+        self.assertLen(history.history["loss"], 2)
+
+    @parameterized.named_parameters(
+        ("sgd", optimizers.SGD, {"learning_rate": 0.1}),
+        ("sgd_momentum", optimizers.SGD, {"momentum": 0.9}),
+        ("sgd_nesterov", optimizers.SGD, {"momentum": 0.9, "nesterov": True}),
+        ("adadelta", optimizers.Adadelta, {"learning_rate": 1.0}),
+    )
+    def test_jit_compile_matches_eager_training(self, optimizer_cls, kwargs):
+        x = np.random.rand(16, 10).astype("float32")
+        y = np.random.rand(16, 1).astype("float32")
+        reference = SimpleModel()
+        reference(x)
+        initial_weights = reference.get_weights()
+
+        trained_weights = []
+        for jit_compile in (False, True):
+            model = SimpleModel()
+            model(x)
+            model.set_weights(initial_weights)
+            model.compile(
+                optimizer=optimizer_cls(**kwargs),
+                loss="mse",
+                jit_compile=jit_compile,
+            )
+            torch._dynamo.reset()
+            counters.clear()
+            model.fit(x, y, epochs=2, batch_size=4, shuffle=False, verbose=0)
+            trained_weights.append(model.get_weights())
+
+        if hasattr(torch._dynamo.config, "trace_autograd_ops"):
+            # The `jit_compile=True` fit (the last one) compiles the whole
+            # train step, optimizer update included, into one graph.
+            self.assertEqual(dict(counters["graph_break"]), {})
+            self.assertEqual(counters["stats"]["unique_graphs"], 1)
+        for eager_weight, jit_weight in zip(*trained_weights):
+            self.assertAllClose(eager_weight, jit_weight, atol=1e-6)
+
+    @parameterized.named_parameters(
+        ("adamw", optimizers.AdamW, {"learning_rate": 0.01}, None),
+        (
+            "adamw_bias_excluded",
+            optimizers.AdamW,
+            {"learning_rate": 0.01},
+            ["bias"],
+        ),
+        # `Muon` applies `adam_weight_decay` when `weight_decay` is None.
+        (
+            "muon_adam_weight_decay_only",
+            optimizers.Muon,
+            {"weight_decay": None},
+            None,
+        ),
+    )
+    def test_jit_compile_with_weight_decay_compiles_once(
+        self, optimizer_cls, kwargs, excluded_names
+    ):
+        x = np.random.rand(16, 10).astype("float32")
+        y = np.random.rand(16, 1).astype("float32")
+        reference = SimpleModel()
+        reference(x)
+        initial_weights = reference.get_weights()
+
+        trained_weights = []
+        for jit_compile in (False, True):
+            model = SimpleModel()
+            model(x)
+            model.set_weights(initial_weights)
+            optimizer = optimizer_cls(**kwargs)
+            if excluded_names:
+                optimizer.exclude_from_weight_decay(var_names=excluded_names)
+            model.compile(
+                optimizer=optimizer, loss="mse", jit_compile=jit_compile
+            )
+            torch._dynamo.reset()
+            counters.clear()
+            model.fit(x, y, epochs=2, batch_size=4, shuffle=False, verbose=0)
+            trained_weights.append(model.get_weights())
+
+        if hasattr(torch._dynamo.config, "trace_autograd_ops"):
+            # The weight decay lookup must not make the second step recompile.
+            self.assertEqual(counters["stats"]["unique_graphs"], 1)
+        for eager_weight, jit_weight in zip(*trained_weights):
+            self.assertAllClose(eager_weight, jit_weight, atol=1e-6)

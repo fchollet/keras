@@ -5,6 +5,8 @@ import numpy as np
 
 from keras.src import backend
 from keras.src import tree
+from keras.src.backend.common import is_float_dtype
+from keras.src.backend.common import standardize_dtype
 from keras.src.trainers.data_adapters import data_adapter_utils
 from keras.src.utils.module_utils import tensorflow as tf
 
@@ -461,8 +463,8 @@ def convert_to_sliceable(arrays, target_backend=None):
         def is_non_floatx_float(dtype):
             return (
                 dtype is not object
-                and backend.is_float_dtype(dtype)
-                and not backend.standardize_dtype(dtype) == backend.floatx()
+                and is_float_dtype(dtype)
+                and not standardize_dtype(dtype) == backend.floatx()
             )
 
         cast_dtype = None

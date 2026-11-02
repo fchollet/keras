@@ -12,7 +12,9 @@ from keras.src.layers.layer import Layer
 from keras.src.layers.regularization.dropout import Dropout
 
 
-@keras_export("keras.layers.GroupQueryAttention")
+@keras_export(
+    ["keras.layers.GroupedQueryAttention", "keras.layers.GroupQueryAttention"]
+)
 class GroupedQueryAttention(Layer):
     """Grouped Query Attention layer.
 

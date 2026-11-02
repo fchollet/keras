@@ -30,7 +30,7 @@ jobs:
       image: python:3.11-slim
 
     name: ${{ format('Run tests on CPU ({0}{1})', matrix.backend, matrix.nnx_enabled && ', NNX' || '') }}
-    runs-on: linux-x86-n2-16
+    runs-on: linux-x86-n4-16
     timeout-minutes: ${{ inputs.timeout }}
 
     env:
@@ -134,15 +134,31 @@ jobs:
 
       - name: Run Tests
         if: ${{ matrix.nnx_enabled == false }}
-        run: pytest keras -n auto --dist loadfile --ignore keras/src/applications --ignore keras/src/wrappers --cov=keras --cov-config=pyproject.toml
+        run: pytest keras -n 12 --dist loadfile --ignore keras/src/applications --ignore keras/src/wrappers --cov=keras --cov-config=pyproject.toml
 
       - name: Run Tests Incompatible with pytest-xdist
         if: ${{ matrix.nnx_enabled == false }}
         run: pytest keras -m no_pytest_xdist -v --cov=keras --cov-config=pyproject.toml --cov-append
 
       - name: Run Multi-Device Tests
-        if: ${{ matrix.backend == 'jax' || matrix.backend == 'torch' }}
+        if: ${{ matrix.backend == 'jax' }}
         run: JAX_NUM_CPU_DEVICES=4 pytest keras -m multi_device --cov=keras --cov-config=pyproject.toml --cov-append
+
+      - name: Run Multi-Process Tests with torchrun
+        if: ${{ matrix.backend == 'torch' }}
+        # On CPU, torch counts one device per process, so the `multi_device`
+        # tests run only under torchrun. torchrun fails when a rank fails, and
+        # `--tee=3` puts the rank in front of each output line. `-x` stops a
+        # failing rank at once, so the other rank does not wait for it in a
+        # collective. The timeout stops all other hangs. Each rank writes its
+        # own coverage file, because two pytest-cov sessions that combine into
+        # one `.coverage` at the same time can corrupt it.
+        timeout-minutes: 10
+        run: |
+          torchrun --nproc_per_node=2 --master_addr=127.0.0.1 --master_port=29500 --tee=3 \
+            -m coverage run --parallel-mode --source=keras --rcfile=pyproject.toml \
+            -m pytest keras/src/backend/torch/torch_multi_process_distribution_test.py -m multi_device -x
+          coverage combine --append
 
       - name: Convert Coverage
         if: ${{ matrix.nnx_enabled == false }}

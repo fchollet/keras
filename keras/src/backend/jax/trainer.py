@@ -124,7 +124,7 @@ def _build_multi_step_iterator_step(
     return iterator_step
 
 
-class JAXTrainer(base_trainer.BaseTrainer):
+class Trainer(base_trainer.BaseTrainer):
     def __init__(self):
         super().__init__()
         self.train_function = None

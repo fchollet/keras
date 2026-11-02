@@ -2,6 +2,7 @@ from keras.src import backend
 from keras.src import ops
 from keras.src.api_export import keras_export
 from keras.src.backend import KerasTensor
+from keras.src.backend.common import standardize_dtype
 from keras.src.layers.layer import Layer
 
 
@@ -163,9 +164,9 @@ class Attention(Layer):
             value: Value tensor of shape `(batch_size, Tv, dim)`.
             scores_mask: A boolean mask tensor of shape `(batch_size, 1, Tv)`
                 or `(batch_size, Tq, Tv)`. If given, scores at positions where
-                `scores_mask==False` do not contribute to the result. It must
-                contain at least one `True` value in each line along the last
-                dimension.
+                `scores_mask==False` do not contribute to the result. A line
+                with no `True` value attends to nothing, so its result and
+                attention scores are 0.
             training: Python boolean indicating whether the layer should behave
                 in training mode (adding dropout) or in inference mode
                 (no dropout).
@@ -177,18 +178,27 @@ class Attention(Layer):
         """
         if scores_mask is not None:
             padding_mask = backend.ops.numpy.logical_not(scores_mask)
-            # Bias so padding positions do not contribute to attention
-            # distribution.  Note 65504. is the max float16 value.
-            max_value = 65504.0 if scores.dtype == "float16" else 1.0e9
+            # Replace masked scores with a large negative constant so they do
+            # not contribute to the attention distribution. Note 65504. is the
+            # max float16 value. A constant rather than a bias keeps the
+            # scores finite: in float16, `scores - 65504.` overflows to -inf
+            # for any score below -16, and a row of -inf gives NaN weights.
+            max_value = (
+                65504.0
+                if standardize_dtype(scores.dtype) == "float16"
+                else 1.0e9
+            )
             if len(padding_mask.shape) == 2:
                 padding_mask = backend.ops.numpy.expand_dims(
                     padding_mask, axis=-2
                 )
-            scores = backend.ops.numpy.where(
-                padding_mask, scores - max_value, scores
-            )
+            scores = backend.ops.numpy.where(padding_mask, -max_value, scores)
 
         weights = backend.ops.nn.softmax(scores, axis=-1)
+        if scores_mask is not None:
+            # Zero out masked positions in case a whole row is masked, where
+            # softmax would otherwise spread the weights over masked values.
+            weights = backend.ops.numpy.where(padding_mask, 0.0, weights)
         if training and self.dropout > 0:
             weights = backend.random.dropout(
                 weights,

@@ -1,6 +1,7 @@
-from keras.src import backend
 from keras.src import tree
 from keras.src.api_export import keras_export
+from keras.src.backend.common import standardize_dtype
+from keras.src.backend.common import standardize_shape
 
 
 @keras_export(["keras.InputSpec", "keras.layers.InputSpec"])
@@ -60,11 +61,9 @@ class InputSpec:
         name=None,
         optional=False,
     ):
-        self.dtype = (
-            backend.standardize_dtype(dtype) if dtype is not None else None
-        )
+        self.dtype = standardize_dtype(dtype) if dtype is not None else None
         if shape is not None:
-            self.shape = backend.standardize_shape(shape)
+            self.shape = standardize_shape(shape)
             self.ndim = len(shape)
         else:
             self.ndim = ndim
@@ -139,6 +138,14 @@ def assert_input_compatibility(input_spec, inputs, layer_name):
     if not input_spec:
         return
 
+    # Fast path for the most common case: a single `InputSpec` and a single
+    # tensor input.
+    if isinstance(input_spec, InputSpec) and not tree.is_nested(inputs):
+        if inputs is None and input_spec.optional:
+            return
+        _check_input_spec(input_spec, inputs, 0, layer_name)
+        return
+
     input_spec = tree.flatten(input_spec)
     if isinstance(inputs, dict):
         # Flatten `inputs` by reference order if input spec names are provided
@@ -179,83 +186,107 @@ def assert_input_compatibility(input_spec, inputs, layer_name):
             continue
         if x is None and spec.optional:
             continue
+        _check_input_spec(spec, x, input_index, layer_name)
 
-        # Having a shape/dtype is the only commonality of the various
-        # tensor-like objects that may be passed. The most common kind of
-        # invalid type we are guarding for is a Layer instance (Functional API),
-        # which does not have a `shape` attribute.
-        if not hasattr(x, "shape"):
+
+def _check_input_spec(spec, x, input_index, layer_name):
+    """Checks compatibility between a single input and a single `InputSpec`.
+
+    This is shared by the fast path and the general path of
+    `assert_input_compatibility` so that both paths apply identical checks.
+
+    Args:
+        spec: An `InputSpec` instance.
+        x: The input to check. `None` inputs for optional specs are skipped
+            by the callers; any other input without a `shape` raises.
+        input_index: Integer, index of the input (for error message
+            formatting).
+        layer_name: String, name of the layer (for error message formatting).
+
+    Raises:
+        ValueError: In case of mismatch between the input and the
+            expectations of the spec.
+    """
+    # Having a shape/dtype is the only commonality of the various
+    # tensor-like objects that may be passed. The most common kind of
+    # invalid type we are guarding for is a Layer instance (Functional API),
+    # which does not have a `shape` attribute.
+    if not hasattr(x, "shape"):
+        raise ValueError(
+            f"Inputs to a layer should be tensors. Got '{x}' "
+            f"(of type {type(x)}) as input for layer '{layer_name}'."
+        )
+
+    shape = standardize_shape(x.shape)
+    ndim = len(shape)
+    # Check ndim.
+    if spec.ndim is not None and not spec.allow_last_axis_squeeze:
+        if ndim != spec.ndim:
             raise ValueError(
-                f"Inputs to a layer should be tensors. Got '{x}' "
-                f"(of type {type(x)}) as input for layer '{layer_name}'."
+                f"Input {input_index} with name '{spec.name}' of layer "
+                f"'{layer_name}' is incompatible with the layer: "
+                f"expected ndim={spec.ndim}, found ndim={ndim}. "
+                f"Full shape received: {shape}"
+            )
+    if spec.max_ndim is not None:
+        if ndim is not None and ndim > spec.max_ndim:
+            raise ValueError(
+                f"Input {input_index} with name '{spec.name}' of layer "
+                f"'{layer_name}' is incompatible with the layer: "
+                f"expected max_ndim={spec.max_ndim}, "
+                f"found ndim={ndim}"
+            )
+    if spec.min_ndim is not None:
+        if ndim is not None and ndim < spec.min_ndim:
+            raise ValueError(
+                f"Input {input_index} with name '{spec.name}' of layer "
+                f"'{layer_name}' is incompatible with the layer: "
+                f"expected min_ndim={spec.min_ndim}, "
+                f"found ndim={ndim}. "
+                f"Full shape received: {shape}"
+            )
+    # Check dtype.
+    if spec.dtype is not None:
+        dtype = standardize_dtype(x.dtype)
+        if dtype != spec.dtype:
+            raise ValueError(
+                f"Input {input_index} with name '{spec.name}' of layer "
+                f"'{layer_name}' is incompatible with the layer: "
+                f"expected dtype={spec.dtype}, "
+                f"found dtype={dtype}"
             )
 
-        shape = backend.standardize_shape(x.shape)
-        ndim = len(shape)
-        # Check ndim.
-        if spec.ndim is not None and not spec.allow_last_axis_squeeze:
-            if ndim != spec.ndim:
+    # Check specific shape axes.
+    if spec.axes:
+        for axis, value in spec.axes.items():
+            if value is None:
+                continue
+            if axis < -ndim or axis >= ndim:
                 raise ValueError(
                     f"Input {input_index} with name '{spec.name}' of layer "
                     f"'{layer_name}' is incompatible with the layer: "
-                    f"expected ndim={spec.ndim}, found ndim={ndim}. "
-                    f"Full shape received: {shape}"
+                    f"axis {axis} is out of bounds for an input with "
+                    f"ndim={ndim}. Full shape received: {shape}"
                 )
-        if spec.max_ndim is not None:
-            if ndim is not None and ndim > spec.max_ndim:
+            if shape[axis] not in {value, None}:
                 raise ValueError(
                     f"Input {input_index} with name '{spec.name}' of layer "
                     f"'{layer_name}' is incompatible with the layer: "
-                    f"expected max_ndim={spec.max_ndim}, "
-                    f"found ndim={ndim}"
+                    f"expected axis {axis} of input shape to have value "
+                    f"{value}, but received input with shape {shape}"
                 )
-        if spec.min_ndim is not None:
-            if ndim is not None and ndim < spec.min_ndim:
-                raise ValueError(
-                    f"Input {input_index} with name '{spec.name}' of layer "
-                    f"'{layer_name}' is incompatible with the layer: "
-                    f"expected min_ndim={spec.min_ndim}, "
-                    f"found ndim={ndim}. "
-                    f"Full shape received: {shape}"
-                )
-        # Check dtype.
-        if spec.dtype is not None:
-            dtype = backend.standardize_dtype(x.dtype)
-            if dtype != spec.dtype:
-                raise ValueError(
-                    f"Input {input_index} with name '{spec.name}' of layer "
-                    f"'{layer_name}' is incompatible with the layer: "
-                    f"expected dtype={spec.dtype}, "
-                    f"found dtype={dtype}"
-                )
-
-        # Check specific shape axes.
-        if spec.axes:
-            for axis, value in spec.axes.items():
-                if value is not None and shape[axis] not in {
-                    value,
-                    None,
-                }:
+    # Check shape.
+    if spec.shape is not None:
+        # `zip` stops at the shorter shape. With `allow_last_axis_squeeze`
+        # the ranks may differ, and only the leading dimensions are
+        # compared: `Functional._adjust_input_rank` checks the rank.
+        # Otherwise the ranks match, since `spec.ndim` is checked above.
+        for spec_dim, dim in zip(spec.shape, shape):
+            if spec_dim is not None and dim is not None:
+                if spec_dim != dim:
                     raise ValueError(
-                        f"Input {input_index} with name '{spec.name}' of layer "
-                        f"'{layer_name}' is incompatible with the layer: "
-                        f"expected axis {axis} of input shape to have value "
-                        f"{value}, but received input with shape {shape}"
+                        f"Input {input_index} with name '{spec.name}' of "
+                        f"layer '{layer_name}' is incompatible with the "
+                        f"layer: expected shape={spec.shape}, found "
+                        f"shape={shape}"
                     )
-        # Check shape.
-        if spec.shape is not None:
-            spec_shape = spec.shape
-            if spec.allow_last_axis_squeeze:
-                if shape and shape[-1] == 1:
-                    shape = shape[:-1]
-                if spec_shape and spec_shape[-1] == 1:
-                    spec_shape = spec_shape[:-1]
-            for spec_dim, dim in zip(spec_shape, shape):
-                if spec_dim is not None and dim is not None:
-                    if spec_dim != dim:
-                        raise ValueError(
-                            f"Input {input_index} with name '{spec.name}' of "
-                            f"layer '{layer_name}' is incompatible with the "
-                            f"layer: expected shape={spec.shape}, found "
-                            f"shape={shape}"
-                        )

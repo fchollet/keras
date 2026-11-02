@@ -1,8 +1,12 @@
 import numpy as np
+import pytest
+from absl.testing import parameterized
 
+from keras.src import backend
 from keras.src import layers
 from keras.src import ops
 from keras.src import testing
+from keras.src.testing import test_utils
 
 
 class AttentionTest(testing.TestCase):
@@ -108,6 +112,66 @@ class AttentionTest(testing.TestCase):
         )
         self.assertAllClose(output, [[[1.0, 1.0], [0.0, 0.0]]])
         self.assertAllClose(scores, [[[1.0, 0.0], [1.0, 0.0]]])
+
+    @parameterized.named_parameters(
+        test_utils.named_product(dtype=["float32", "float16"])
+    )
+    def test_attention_with_fully_masked_row(self, dtype):
+        # Batch element 0 masks every value position, element 1 masks one. A
+        # fully masked row attends to nothing, so its output and scores are 0.
+        query = np.array([[[1.0, 0.0], [0.0, 1.0]]] * 2)
+        value = np.array([[[1.0, 2.0], [3.0, 4.0]]] * 2)
+        value_mask = np.array([[False, False], [True, False]])
+        layer = layers.Attention(dtype=dtype)
+        output, scores = layer(
+            [query.astype(dtype), value.astype(dtype)],
+            mask=[None, value_mask],
+            return_attention_scores=True,
+        )
+        self.assertAllClose(
+            output, [[[0.0, 0.0], [0.0, 0.0]], [[1.0, 2.0], [1.0, 2.0]]]
+        )
+        self.assertAllClose(
+            scores, [[[0.0, 0.0], [0.0, 0.0]], [[1.0, 0.0], [1.0, 0.0]]]
+        )
+
+    @parameterized.named_parameters(
+        test_utils.named_product(dtype=["float32", "float16"])
+    )
+    @pytest.mark.requires_trainable_backend
+    def test_attention_fully_masked_row_has_zero_gradients(self, dtype):
+        # Every value position is masked, so the gradients are 0. Every score
+        # is below -16, which overflows to -inf in float16 if the masked
+        # scores are offset rather than replaced, and gives NaN gradients.
+        query = np.array([[[-10.0, -10.0], [-20.0, 0.0]]])
+        value = np.array([[[1.0, 2.0], [3.0, 4.0]]])
+        mask = [None, np.array([[False, False]])]
+        layer = layers.Attention(dtype=dtype)
+        grads = ops.grad(lambda q, v: layer([q, v], mask=mask), argnums=(0, 1))(
+            query.astype(dtype), value.astype(dtype)
+        )
+        for grad in grads:
+            self.assertAllClose(grad, ops.zeros_like(grad))
+
+    @pytest.mark.skipif(backend.backend() != "torch", reason="Torch only test.")
+    def test_attention_fully_masked_row_float16_backward_has_no_nan(self):
+        # A torch dtype never compares equal to the string "float16", so this
+        # checks that torch also masks float16 scores with 65504 rather than
+        # with 1e9, which is -inf in float16. A fully masked row of -inf gives
+        # NaN in the softmax backward, which anomaly detection reports even
+        # though the gradients reaching the inputs are 0.
+        import torch
+
+        query = torch.tensor([[[1.0, 0.0]]], dtype=torch.float16)
+        value = torch.tensor(
+            [[[1.0, 2.0], [3.0, 4.0]]], dtype=torch.float16, requires_grad=True
+        )
+        value_mask = np.array([[False, False]])
+        layer = layers.Attention(dtype="float16")
+        with torch.autograd.detect_anomaly():
+            output = layer([query, value], mask=[None, value_mask])
+            output.float().sum().backward()
+        self.assertAllClose(value.grad, np.zeros((1, 2, 2)))
 
     def test_attention_2D_mask_shape_mismatch(self):
         layer = layers.Attention()

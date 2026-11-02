@@ -6,6 +6,12 @@ import zipfile
 
 import numpy as np
 
+# A dataset npz member is rejected as a decompression bomb when its declared
+# size is above this floor and far larger than the bytes stored on disk. Genuine
+# dataset members store real data and should not approach this expansion ratio.
+_NPZ_MEMBER_BOMB_FLOOR_BYTES = 1 << 32  # 4 GiB
+_NPZ_MEMBER_MAX_EXPANSION = 100
+
 # Globals required to reconstruct the numpy object arrays stored inside the
 # IMDB / Reuters `.npz` files. These datasets store ragged sequences as
 # `dtype=object` arrays, which numpy can only persist as a pickle stream, so
@@ -37,6 +43,22 @@ class RestrictedUnpickler(pickle.Unpickler):
         raise pickle.UnpicklingError(
             f"Refusing to deserialize `{module}.{name}` while loading a Keras "
             "dataset. The file may be corrupted or malicious."
+        )
+
+
+def _reject_npz_member_bomb(info):
+    """Raise if an npz member is a decompression bomb."""
+    if (
+        info.file_size > _NPZ_MEMBER_BOMB_FLOOR_BYTES
+        and info.file_size > _NPZ_MEMBER_MAX_EXPANSION * info.compress_size
+    ):
+        from keras.src.utils.summary_utils import readable_memory_size
+
+        raise ValueError(
+            f"Refusing to load npz member '{info.filename}': it declares "
+            f"{readable_memory_size(info.file_size)} but only "
+            f"{readable_memory_size(info.compress_size)} are stored on disk; "
+            "refusing to load a potential decompression bomb."
         )
 
 
@@ -84,9 +106,11 @@ def load_npz(path):
     """
     arrays = {}
     with zipfile.ZipFile(path) as archive:
-        for member in archive.namelist():
+        for info in archive.infolist():
+            member = info.filename
             if not member.endswith(".npy"):
                 continue
+            _reject_npz_member_bomb(info)
             with archive.open(member) as raw:
                 buffer = io.BytesIO(raw.read())
             arrays[member[: -len(".npy")]] = load_npy_member(buffer)

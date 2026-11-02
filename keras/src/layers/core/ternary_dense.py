@@ -45,17 +45,11 @@ class TernaryDense(Layer):
     **Checkpoint size.** `quantize("ternary")` stores weights at ~1.58
     bits/value (~5× smaller than float32, ~2.5× smaller than int4).
 
-    **Inference note.** The current inference path unpacks
-    the packed kernel to a full `{-1, 0, +1}` matrix on every forward pass
-    and feeds it to a standard matmul. Standard BLAS does not skip zero
-    multiplications, so there is no compute speedup in this path and
-    inference is slightly slower than a plain `Dense` call (due to the
-    per-call unpack). The *design* of the inference path is sparseskip —
-    weights are split into two boolean masks (+1 and -1) so the matmul is
-    structurally multiply-free (only additions, subtractions, and zero-skips
-    on kernel values). Realizing that speedup end-to-end requires a native
-    ternary kernel that reads the packed format directly rather than going
-    through a generic float matmul.
+    **Inference note.** `quantize("ternary")` is a storage format, not a
+    compute win: the packed kernel is unpacked to a full `{-1, 0, +1}` matrix
+    on every forward pass and fed to a standard matmul, so inference is
+    slightly slower than a plain `Dense` call. A native ternary kernel that
+    reads the packed format directly would be needed for a speedup.
 
     Args:
         units: Positive integer, dimensionality of the output space.
@@ -156,6 +150,8 @@ class TernaryDense(Layer):
     def build(self, input_shape):
         input_dim = input_shape[-1]
         kernel_shape = (input_dim, self.units)
+        # The float kernel's shape, whatever a quantization mode stores.
+        self.kernel_shape = kernel_shape
         if self.quantization_mode:
             # Packed kernel + scale are created here; the float `kernel` is not.
             self.quantized_build(kernel_shape, mode=self.quantization_mode)
@@ -166,6 +162,7 @@ class TernaryDense(Layer):
                 initializer=self.kernel_initializer,
                 regularizer=self.kernel_regularizer,
                 constraint=self.kernel_constraint,
+                autocast=False,
             )
         if self.use_bias:
             self.bias = self.add_weight(
@@ -198,16 +195,29 @@ class TernaryDense(Layer):
         """The straight-through kernel and `beta = mean(|kernel|)`.
 
         The kernel's forward value is in {-1, 0, +1} and gradients flow via
-        STE. The threshold and `beta` are taken in float32, like
-        `quantizers.ternarize`.
+        STE. The trits and `beta` are decided on the stored kernel in
+        float32, whatever the autocast scope, like `quantizers.ternarize`
+        in `quantize()`.
         """
-        abs_k = ops.abs(ops.cast(self._kernel, "float32"))
+        # Not `self._kernel._value`: the JAX trainer detaches it during `fit`,
+        # `evaluate` and `predict` and feeds the weights through a stateless
+        # scope, which only `.value` reads. The kernel is created with
+        # `autocast=False`, so `.value` is its stored value in every scope.
+        stored = self._kernel.value
+        abs_k = ops.abs(ops.cast(stored, "float32"))
         beta = ops.mean(abs_k)
         t = 0.5 * beta if self.threshold is None else self.threshold
-        k_ternary = ops.sign(self._kernel) * ops.cast(
-            ops.greater(abs_k, t), dtype=self._kernel.dtype
+        k_ternary = ops.sign(stored) * ops.cast(
+            ops.greater(abs_k, t), dtype=stored.dtype
         )
-        return self._kernel + ops.stop_gradient(k_ternary - self._kernel), beta
+        # The straight-through sum, and the matmul after it, run in the
+        # compute dtype, as they do for an autocast kernel.
+        kernel = ops.cast(stored, self.compute_dtype)
+        k_ternary = ops.cast(k_ternary, self.compute_dtype)
+        return (
+            ops.add(kernel, ops.stop_gradient(ops.subtract(k_ternary, kernel))),
+            beta,
+        )
 
     def call(self, inputs):
         k, beta = self._ternary_kernel()
@@ -242,43 +252,11 @@ class TernaryDense(Layer):
             "ternary": ["kernel", "bias", "kernel_scale"],
         }
 
-    def _serialization_targets(self, mode):
-        return {
-            "kernel": (
-                self._packed_kernel if mode == "ternary" else self._kernel
-            ),
-            "bias": self.bias,
-            "kernel_scale": getattr(self, "kernel_scale", None),
-        }
-
     def save_own_variables(self, store):
-        if not self.built:
-            return
-        mode = self.quantization_mode
-        if mode not in self.variable_serialization_spec:
-            raise self._quantization_mode_error(mode)
-        targets = self._serialization_targets(mode)
-        idx = 0
-        for name in self.variable_serialization_spec[mode]:
-            if name == "bias" and self.bias is None:
-                continue
-            store[str(idx)] = targets[name]
-            idx += 1
+        self._save_serialized_variables(store, "kernel")
 
     def load_own_variables(self, store):
-        self._check_load_own_variables(store)
-        if not self.built:
-            return
-        mode = self.quantization_mode
-        if mode not in self.variable_serialization_spec:
-            raise self._quantization_mode_error(mode)
-        targets = self._serialization_targets(mode)
-        idx = 0
-        for name in self.variable_serialization_spec[mode]:
-            if name == "bias" and self.bias is None:
-                continue
-            targets[name].assign(store[str(idx)])
-            idx += 1
+        self._load_serialized_variables(store, "kernel")
 
     def compute_output_shape(self, input_shape):
         output_shape = list(input_shape)
@@ -319,7 +297,9 @@ class _TernaryDenseGeometry(ProjectionGeometry):
 
     def ternary_values(self):
         layer = self.layer
-        # The rule of the straight-through kernel used in training, so the
-        # frozen codes are exactly its forward value; the scale is `beta`,
-        # or 1.0 with a fixed threshold.
-        return ternarize(layer._kernel, layer.threshold)
+        # The rule of the straight-through kernel on the stored kernel, as
+        # in `_ternary_kernel`, so the frozen codes are exactly its forward
+        # value; the scale is `beta`, or 1.0 with a fixed threshold.
+        # `quantize()` runs eagerly, outside any stateless scope, so `_value`
+        # is the live kernel in its own dtype.
+        return ternarize(layer._kernel._value, layer.threshold)

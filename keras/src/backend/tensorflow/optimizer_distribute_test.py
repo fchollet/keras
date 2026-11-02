@@ -81,21 +81,23 @@ class OptimizerDistributeTest(testing.TestCase):
                 lambda: optimizer_1.apply_gradients(zip([grads], [var1]))
             )
 
+            # `exclude_from_weight_decay` must run before the optimizer is
+            # built, so call it once, outside of `strategy.run`.
             optimizer_2 = SGD(learning_rate=1.0, weight_decay=0.004)
-
-            def opt2_run():
-                optimizer_2.exclude_from_weight_decay(var_names=["exclude"])
-                optimizer_2.apply_gradients(zip([grads, grads], [var1, var2]))
-
-            self.strategy.run(opt2_run)
+            optimizer_2.exclude_from_weight_decay(var_names=["exclude"])
+            self.strategy.run(
+                lambda: optimizer_2.apply_gradients(
+                    zip([grads, grads], [var1, var2])
+                )
+            )
 
             optimizer_3 = SGD(learning_rate=1.0, weight_decay=0.004)
-
-            def opt3_run():
-                optimizer_3.exclude_from_weight_decay(var_list=[var3])
-                optimizer_3.apply_gradients(zip([grads, grads], [var1, var3]))
-
-            self.strategy.run(opt3_run)
+            optimizer_3.exclude_from_weight_decay(var_list=[var3])
+            self.strategy.run(
+                lambda: optimizer_3.apply_gradients(
+                    zip([grads, grads], [var1, var3])
+                )
+            )
 
         self.assertAlmostEqual(var1.numpy(), 1.9760959)
         self.assertAlmostEqual(var2.numpy(), 3.0)
@@ -178,6 +180,43 @@ class OptimizerDistributeTest(testing.TestCase):
                 [[1.9, 2.9], [3.9, 4.9]],
             )
             self.strategy.run(lambda: optimizer.apply_gradients([(grads, v)]))
+            # Variables were overwritten with EMA
+            self.assertAllClose(v, [[1.71, 2.71], [3.71, 4.71]])
+            self.assertAllClose(
+                optimizer._model_variables_moving_average[0],
+                [[1.71, 2.71], [3.71, 4.71]],
+            )
+
+    def test_ema_in_tf_function(self):
+        with self.strategy.scope():
+            v = backend.Variable([[3.0, 4.0], [5.0, 6.0]])
+            grads = backend.ops.convert_to_tensor([[1.0, 1.0], [1.0, 1.0]])
+            optimizer = SGD(
+                learning_rate=1.0,
+                use_ema=True,
+                ema_momentum=0.9,
+                ema_overwrite_frequency=3,
+            )
+
+            @tf.function
+            def distributed_update():
+                self.strategy.run(
+                    lambda: optimizer.apply_gradients([(grads, v)])
+                )
+
+            distributed_update()
+            self.assertAllClose(v, [[2.0, 3.0], [4.0, 5.0]])
+            self.assertAllClose(
+                optimizer._model_variables_moving_average[0],
+                [[2.0, 3.0], [4.0, 5.0]],  # initialized after first step
+            )
+            distributed_update()
+            self.assertAllClose(v, [[1.0, 2.0], [3.0, 4.0]])
+            self.assertAllClose(
+                optimizer._model_variables_moving_average[0],
+                [[1.9, 2.9], [3.9, 4.9]],
+            )
+            distributed_update()
             # Variables were overwritten with EMA
             self.assertAllClose(v, [[1.71, 2.71], [3.71, 4.71]])
             self.assertAllClose(

@@ -54,7 +54,7 @@ def _dot_product_attention(
 
     def _apply_masks(logits, mask, is_causal):
         def _get_large_negative(dtype):
-            dtype = backend.standardize_dtype(dtype)
+            dtype = standardize_dtype(dtype)
             if dtype == "float16":
                 val = 65500.0
             else:
@@ -441,7 +441,7 @@ class NNOpsDynamicShapeTest(testing.TestCase):
 
         x = np.arange(5)
         out = knn.multi_hot(x, 5, axis=0, dtype=dtype, sparse=sparse)
-        self.assertEqual(backend.standardize_dtype(out.dtype), dtype)
+        self.assertEqual(standardize_dtype(out.dtype), dtype)
         self.assertSparse(out, sparse)
 
     def test_conv(self):
@@ -801,7 +801,7 @@ class NNOpsDynamicShapeTest(testing.TestCase):
 
         x = np.arange(5)
         out = knn.one_hot(x, 5, axis=0, dtype=dtype, sparse=sparse)
-        self.assertEqual(backend.standardize_dtype(out.dtype), dtype)
+        self.assertEqual(standardize_dtype(out.dtype), dtype)
         self.assertSparse(out, sparse)
 
     def test_moments(self):
@@ -1598,6 +1598,12 @@ class NNOpsCorrectnessTest(testing.TestCase):
     def test_sparse_sigmoid(self):
         x = np.array([-1, 0, 1, 2, 3], dtype=np.float32)
         self.assertAllClose(knn.sparse_sigmoid(x), [0.0, 0.5, 1.0, 1.0, 1.0])
+        # Integer input is promoted to float. The numpy backend previously
+        # truncated the `0.5` midpoint to 0 under an integer dtype.
+        x_int = np.array([-1, 0, 1, 2, 3], dtype="int32")
+        self.assertAllClose(
+            knn.sparse_sigmoid(x_int), [0.0, 0.5, 1.0, 1.0, 1.0]
+        )
 
     def test_softplus(self):
         x = np.array([-1, 0, 1, 2, 3], dtype=np.float32)
@@ -1675,6 +1681,17 @@ class NNOpsCorrectnessTest(testing.TestCase):
             knn.selu(x),
             [-1.1113307, 0.0, 1.050701, 2.101402, 3.152103],
         )
+        # Integer input is promoted to float. Previously the numpy, tensorflow
+        # and openvino backends cast `scale` to the input's integer dtype where
+        # it truncated to 1 (turning this into a bare `elu`), and torch raised.
+        x_int = np.array([-2, -1, 0, 1, 2], dtype="int32")
+        self.assertAllClose(knn.selu(x_int), knn.selu(x_int.astype("float32")))
+        self.assertEqual(
+            standardize_dtype(
+                knn.Selu().symbolic_call(KerasTensor((5,), "int32")).dtype
+            ),
+            standardize_dtype(knn.selu(x_int).dtype),
+        )
 
     def test_gelu(self):
         x = np.array([-1, 0, 1, 2, 3], dtype=np.float32)
@@ -1738,12 +1755,34 @@ class NNOpsCorrectnessTest(testing.TestCase):
             knn.soft_shrink(x),
             [0.0, 0.0, 0.5, 1.5, 2.5],
         )
+        # Integer input is promoted to float. Previously the numpy, tensorflow
+        # and openvino backends cast the fractional `threshold` shift back to
+        # the input's integer dtype where it truncated, and torch raised.
+        x_int = np.array([-2, -1, 0, 1, 2], dtype="int32")
+        self.assertAllClose(knn.soft_shrink(x_int), [-1.5, -0.5, 0.0, 0.5, 1.5])
+        self.assertEqual(
+            standardize_dtype(
+                knn.SoftShrink().symbolic_call(KerasTensor((5,), "int32")).dtype
+            ),
+            standardize_dtype(knn.soft_shrink(x_int).dtype),
+        )
 
     def test_sparse_plus(self):
         x = np.array([-0.5, 0, 1, 2, 3], dtype=np.float32)
         self.assertAllClose(
             knn.sparse_plus(x),
             [0.0625, 0.25, 1.0, 2.0, 3.0],
+        )
+        # Integer input is promoted to float. Previously the numpy, tensorflow
+        # and openvino backends cast the quadratic branch back to the input's
+        # integer dtype where it truncated, and torch raised.
+        x_int = np.array([-2, -1, 0, 1, 2], dtype="int32")
+        self.assertAllClose(knn.sparse_plus(x_int), [0.0, 0.0, 0.25, 1.0, 2.0])
+        self.assertEqual(
+            standardize_dtype(
+                knn.SparsePlus().symbolic_call(KerasTensor((5,), "int32")).dtype
+            ),
+            standardize_dtype(knn.sparse_plus(x_int).dtype),
         )
 
     def test_softmax(self):
@@ -1838,9 +1877,7 @@ class NNOpsCorrectnessTest(testing.TestCase):
             KerasTensor((2,), dtype="float32"),
             KerasTensor((2,), dtype="float32"),
         )
-        self.assertEqual(
-            backend.standardize_dtype(out.dtype), symbolic_out.dtype
-        )
+        self.assertEqual(standardize_dtype(out.dtype), symbolic_out.dtype)
 
     def test_sparsemax(self):
         x = np.array([-0.5, 0, 1, 2, 3], dtype=np.float32)
@@ -2012,9 +2049,10 @@ class NNOpsCorrectnessTest(testing.TestCase):
         strides=(1, 2, 3),
         padding=("valid", "same"),
         dilation_rate=(1, 2),
+        data_format=("channels_first", "channels_last"),
     )
-    def test_conv_1d(self, strides, padding, dilation_rate):
-        if backend.config.image_data_format() == "channels_last":
+    def test_conv_1d(self, strides, padding, dilation_rate, data_format):
+        if data_format == "channels_last":
             input_shape = (2, 20, 3)
         else:
             input_shape = (2, 3, 20)
@@ -2027,6 +2065,7 @@ class NNOpsCorrectnessTest(testing.TestCase):
             strides=strides,
             padding=padding,
             dilation_rate=dilation_rate,
+            data_format=data_format,
         )
         expected = np_conv1d(
             inputs_1d,
@@ -2034,29 +2073,35 @@ class NNOpsCorrectnessTest(testing.TestCase):
             bias_weights=np.zeros((2,)),
             strides=strides,
             padding=padding.lower(),
-            data_format=backend.config.image_data_format(),
+            data_format=data_format,
             dilation_rate=dilation_rate,
             groups=1,
         )
         self.assertAllClose(outputs, expected)
 
-    @parameterized.product(strides=(1, 2, (1, 2)), padding=("valid", "same"))
-    def test_conv_2d(self, strides, padding):
-        if backend.config.image_data_format() == "channels_last":
+    @parameterized.product(
+        strides=(1, 2, (1, 2)),
+        padding=("valid", "same"),
+        data_format=("channels_last", "channels_first"),
+    )
+    def test_conv_2d(self, strides, padding, data_format):
+        if data_format == "channels_last":
             input_shape = (2, 10, 10, 3)
         else:
             input_shape = (2, 3, 10, 10)
         inputs_2d = np.arange(600, dtype=float).reshape(input_shape)
         kernel = np.arange(24, dtype=float).reshape([2, 2, 3, 2])
 
-        outputs = knn.conv(inputs_2d, kernel, strides, padding=padding)
+        outputs = knn.conv(
+            inputs_2d, kernel, strides, padding=padding, data_format=data_format
+        )
         expected = np_conv2d(
             inputs_2d,
             kernel,
             bias_weights=np.zeros((2,)),
             strides=strides,
             padding=padding,
-            data_format=backend.config.image_data_format(),
+            data_format=data_format,
             dilation_rate=1,
             groups=1,
         )
@@ -2564,6 +2609,7 @@ class NNOpsCorrectnessTest(testing.TestCase):
         expected = -(t * np.log(probs) + (1 - t) * np.log(1 - probs))
         tol = {"float32": 1e-6, "float16": 1e-3, "bfloat16": 1e-2}[output_dtype]
         self.assertAllClose(result, expected, atol=tol, rtol=tol)
+        self.assertEqual(standardize_dtype(result.dtype), output_dtype)
 
     @parameterized.parameters(
         ("int32", True), ("int32", False), ("uint8", False), ("bool", False)
@@ -2585,6 +2631,21 @@ class NNOpsCorrectnessTest(testing.TestCase):
             KerasTensor((4,), "float32"), KerasTensor((4,), output_dtype)
         )
         self.assertEqual(symbolic.dtype, backend.floatx())
+
+    @parameterized.product(
+        target_dtype=["int32", "bool", "float32"],
+        output_dtype=["float16", "bfloat16", "float32"],
+        from_logits=[True, False],
+    )
+    def test_binary_crossentropy_dtype(
+        self, target_dtype, output_dtype, from_logits
+    ):
+        target = np.ones((2,), dtype=target_dtype)
+        output = np.full((2,), 0.5, dtype=output_dtype)
+        result = knn.binary_crossentropy(
+            target, output, from_logits=from_logits
+        )
+        self.assertEqual(standardize_dtype(result.dtype), output_dtype)
 
     def test_categorical_crossentropy(self):
         target = np.array(
@@ -3150,30 +3211,28 @@ class NNOpsCorrectnessTest(testing.TestCase):
         # A backend kernel normalizes over trailing axes, so any other set of
         # axes exercises the backend moving them into place.
         backend.config._set_use_backend_agnostic_ops(backend_agnostic_ops)
-        try:
-            x = np.arange(120, dtype="float32").reshape((2, 3, 4, 5)) / 120.0
-            axes = tuple(axis)
-            epsilon = 1e-5
+        self.addCleanup(backend.config._set_use_backend_agnostic_ops, False)
+        x = np.arange(120, dtype="float32").reshape((2, 3, 4, 5)) / 120.0
+        axes = tuple(axis)
+        epsilon = 1e-5
 
-            expected = x / np.sqrt(
-                np.mean(np.square(x), axis=axes, keepdims=True) + epsilon
-            )
-            self.assertAllClose(
-                knn.rms_normalization(x, axis=axis, epsilon=epsilon),
-                expected,
-                atol=1e-5,
-            )
+        expected = x / np.sqrt(
+            np.mean(np.square(x), axis=axes, keepdims=True) + epsilon
+        )
+        self.assertAllClose(
+            knn.rms_normalization(x, axis=axis, epsilon=epsilon),
+            expected,
+            atol=1e-5,
+        )
 
-            mean = np.mean(x, axis=axes, keepdims=True)
-            variance = np.var(x, axis=axes, keepdims=True)
-            expected = (x - mean) / np.sqrt(variance + epsilon)
-            self.assertAllClose(
-                knn.layer_normalization(x, axis=axis, epsilon=epsilon),
-                expected,
-                atol=1e-5,
-            )
-        finally:
-            backend.config._set_use_backend_agnostic_ops(False)
+        mean = np.mean(x, axis=axes, keepdims=True)
+        variance = np.var(x, axis=axes, keepdims=True)
+        expected = (x - mean) / np.sqrt(variance + epsilon)
+        self.assertAllClose(
+            knn.layer_normalization(x, axis=axis, epsilon=epsilon),
+            expected,
+            atol=1e-5,
+        )
 
 
 class NNOpsDtypeTest(testing.TestCase):
@@ -3565,7 +3624,9 @@ class NNOpsDtypeTest(testing.TestCase):
             expected_dtype,
         )
 
-    @parameterized.named_parameters(named_product(dtype=FLOAT_DTYPES))
+    @parameterized.named_parameters(
+        named_product(dtype=FLOAT_DTYPES + INT_DTYPES + ["bool"])
+    )
     def test_sparse_sigmoid(self, dtype):
         import jax.nn as jnn
         import jax.numpy as jnp

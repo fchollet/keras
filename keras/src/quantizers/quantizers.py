@@ -6,6 +6,7 @@ import numpy as np
 from keras.src import backend
 from keras.src import ops
 from keras.src.api_export import keras_export
+from keras.src.backend.common import standardize_dtype
 from keras.src.backend.common.backend_utils import standardize_axis_for_numpy
 
 
@@ -87,7 +88,7 @@ def abs_max_quantize(
     """
     if to_numpy:
         # Save memory on the device using numpy
-        original_dtype = backend.standardize_dtype(inputs.dtype)
+        original_dtype = standardize_dtype(inputs.dtype)
         inputs = ops.convert_to_numpy(inputs)
         axis = standardize_axis_for_numpy(axis)
         scale = np.divide(
@@ -106,7 +107,7 @@ def abs_max_quantize(
         value_range[1],
         ops.add(ops.max(ops.abs(inputs), axis=axis, keepdims=True), epsilon),
     )
-    scale = ops.cast(scale, backend.standardize_dtype(inputs.dtype))
+    scale = ops.cast(scale, standardize_dtype(inputs.dtype))
     outputs = ops.multiply(inputs, scale)
     outputs = ops.clip(ops.round(outputs), value_range[0], value_range[1])
     outputs = ops.cast(outputs, dtype)
@@ -183,7 +184,7 @@ def _abs_max_quantize_grouped_with_zero_point_numpy(
     Uses NumPy for computation to reduce GPU memory usage during
     model quantization.
     """
-    original_dtype = backend.standardize_dtype(inputs.dtype)
+    original_dtype = standardize_dtype(inputs.dtype)
     inputs = ops.convert_to_numpy(inputs)
 
     input_dim, output_dim = inputs.shape
@@ -242,7 +243,7 @@ def _abs_max_quantize_grouped_with_zero_point_tensor(
     The same formula as `_abs_max_quantize_grouped_with_zero_point_numpy`,
     for callers that keep the weight on the accelerator.
     """
-    original_dtype = backend.standardize_dtype(inputs.dtype)
+    original_dtype = standardize_dtype(inputs.dtype)
     inputs = ops.convert_to_tensor(inputs)
 
     input_shape = ops.shape(inputs)

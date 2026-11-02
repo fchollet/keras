@@ -1,4 +1,4 @@
-from keras.src import ops
+from keras.src import backend
 from keras.src.api_export import keras_export
 from keras.src.layers.merging.base_merge import Merge
 
@@ -31,7 +31,9 @@ class Minimum(Merge):
     """
 
     def _merge_function(self, inputs):
-        return self._apply_merge_op_and_or_mask(ops.minimum, inputs)
+        return self._apply_merge_op_and_or_mask(
+            backend.ops.numpy.minimum, inputs
+        )
 
 
 @keras_export("keras.layers.minimum")

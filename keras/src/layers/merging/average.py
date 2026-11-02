@@ -1,4 +1,4 @@
-from keras.src import ops
+from keras.src import backend
 from keras.src.api_export import keras_export
 from keras.src.layers.merging.base_merge import Merge
 
@@ -33,7 +33,7 @@ class Average(Merge):
     def _merge_function(self, inputs):
         output = inputs[0]
         for i in range(1, len(inputs)):
-            output = ops.add(output, inputs[i])
+            output = backend.ops.numpy.add(output, inputs[i])
         return output / len(inputs)
 
 

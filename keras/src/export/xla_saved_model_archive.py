@@ -1,11 +1,11 @@
-"""Base class for NeptuneModel export archive."""
+"""Base class for XLA SavedModel archive."""
 
 
-class NeptuneModelExportArchive:
+class XLASavedModelArchive:
     def __init__(self):
         raise NotImplementedError(
-            "NeptuneExportArchive is an abstract class. "
-            "Use a subclass such as OrbaxSavedModelExportArchive."
+            "XLASavedModelArchive is an abstract class. "
+            "Use a subclass such as SavedModelExportArchive."
         )
 
     def track(self, resource):

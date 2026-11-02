@@ -1,4 +1,9 @@
+import contextlib
+
 import numpy as np
+
+from keras.src.backend import config
+from keras.src.utils.module_utils import jax
 
 
 def get_test_data(
@@ -163,21 +168,53 @@ def named_product(*args, **kwargs):
     return tests
 
 
+@contextlib.contextmanager
+def x64_mode_scope(mode):
+    """Runs the block with `keras.config.x64_mode()` set to `mode`.
+
+    JAX is the reference for the dtype tests, so when it is installed it is
+    put in the matching mode on every backend. Both settings are restored
+    afterwards.
+
+    Args:
+        mode: `"off"` or `"explicit_x64"`.
+    """
+    # JAX's flag is set first and restored first, so it always matches the
+    # Keras mode when `set_x64_mode` reconciles the two.
+    previous_mode = config.x64_mode()
+    try:
+        with _jax_explicit_x64_scope(mode == "explicit_x64"):
+            config.set_x64_mode(mode)
+            yield
+    finally:
+        config.set_x64_mode(previous_mode)
+
+
+@contextlib.contextmanager
+def _jax_explicit_x64_scope(allow):
+    """Sets `jax_explicit_x64_dtypes` for the block, if JAX is installed."""
+    if not jax.available:
+        yield
+        return
+    previous = jax.config.jax_explicit_x64_dtypes
+    jax.config.update("jax_explicit_x64_dtypes", "allow" if allow else "warn")
+    try:
+        yield
+    finally:
+        jax.config.update("jax_explicit_x64_dtypes", previous)
+
+
 def serialized_variable(layer, name):
     """Returns the underlying variable a serialization-spec `name` maps to.
 
     `save_own_variables`/`load_own_variables` serialize the raw
     `_kernel`/`_embeddings` variables for the `"kernel"`/`"embeddings"` spec
-    entries. In `ternary` mode there is no float `_kernel` at all -- the layer
-    stores `_packed_kernel` instead, and that is what gets serialized for
-    `"kernel"`. All other spec names map directly to the attribute of the same
-    name. Returns `None` if the attribute does not exist on the layer.
+    entries (a quantized layer's `_kernel` holds its codes). All other spec
+    names map directly to the attribute of the same name. Returns `None` if
+    the attribute does not exist on the layer.
     """
     if name == "kernel":
-        kernel = getattr(layer, "_kernel", None)
-        if kernel is None:
-            kernel = getattr(layer, "_packed_kernel", None)
-        return kernel
+        return getattr(layer, "_kernel", None)
     if name == "embeddings":
         return getattr(layer, "_embeddings", None)
     return getattr(layer, name, None)
@@ -187,13 +224,10 @@ def is_serialized_variable(layer, name):
     """Mirrors the skip conditions used by `save_own_variables`.
 
     Optional variables (`bias`, `kernel_zero`, `g_idx`, `embeddings_zero` and
-    the `reverse_*` variables of `ReversibleEmbedding`) are only serialized when
-    they actually exist on the layer for its current configuration.
+    the `reverse_*` variables of `ReversibleEmbedding`) are attributes that
+    hold `None` when the layer's configuration omits them, and are only
+    serialized when they hold a variable.
     """
-    if name == "bias":
-        return getattr(layer, "bias", None) is not None
-    if name in ("kernel_zero", "g_idx", "embeddings_zero"):
-        return hasattr(layer, name)
     return serialized_variable(layer, name) is not None
 
 

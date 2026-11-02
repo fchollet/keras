@@ -5,6 +5,7 @@ from absl.testing import parameterized
 from keras.src import backend
 from keras.src import ops
 from keras.src import testing
+from keras.src.backend.common import standardize_dtype
 from keras.src.backend.common.keras_tensor import KerasTensor
 from keras.src.ops import linalg
 from keras.src.testing.test_utils import named_product
@@ -547,9 +548,7 @@ class LinalgOpsCorrectnessTest(testing.TestCase):
         _, symbolic_pivots = linalg.LuFactor().symbolic_call(
             KerasTensor((m, n), dtype="float32")
         )
-        self.assertEqual(
-            backend.standardize_dtype(pivots.dtype), symbolic_pivots.dtype
-        )
+        self.assertEqual(standardize_dtype(pivots.dtype), symbolic_pivots.dtype)
 
         m, n = 4, 3
         x = np.random.rand(m, n)
@@ -645,6 +644,22 @@ class LinalgOpsCorrectnessTest(testing.TestCase):
         output = linalg.solve(x1, x2)
         expected_result = np.array([[2, 0], [0, 2]], dtype="float32")
         self.assertAllClose(output, expected_result)
+
+    @parameterized.named_parameters(
+        named_product(batch_shape=[(), (1,), (2,), (3,), (2, 3)])
+    )
+    def test_solve_vector_rhs(self, batch_shape):
+        shape = batch_shape + (2,)
+        diagonals = np.arange(1, np.prod(shape) + 1, dtype="float32").reshape(
+            shape
+        )
+        a = diagonals[..., :, None] * np.eye(2, dtype="float32")
+        b = 2 * (diagonals + 1)
+        expected_result = b / diagonals
+        self.assertAllClose(linalg.solve(a, b), expected_result)
+        self.assertAllClose(
+            linalg.solve(a, b[..., None]), expected_result[..., None]
+        )
 
     def test_solve_triangular(self):
         # 2d-case

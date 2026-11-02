@@ -1,3 +1,4 @@
+import dataclasses
 import re
 import string
 
@@ -177,6 +178,12 @@ class EinsumDense(Layer):
         )
         kernel_shape, bias_shape, _, input_axes, output_axes = shape_data
         self.input_spec = InputSpec(ndim=len(input_shape))
+        # The float kernel's N-D shape, whatever a quantization mode stores,
+        # and the equation's axis bookkeeping the quantization modes read.
+        self.kernel_shape = tuple(kernel_shape)
+        self.einsum_axes = EinsumAxes.from_equation(
+            self.equation, len(input_shape)
+        )
 
         kernel_initializer = self.kernel_initializer
         if isinstance(self.kernel_initializer, VarianceScaling) and (
@@ -300,15 +307,6 @@ class EinsumDense(Layer):
             )
         self._check_lora_supported(self.quantization_mode)
         self._tracker.unlock()
-        # Determine the appropriate (unpacked) kernel shape for LoRA.
-        if self.quantization_mode == "int4":
-            # INT4 weights are stored in a flattened 2D layout that loses
-            # the original N-dimensional structure required by the einsum
-            # equation. We use `original_kernel_shape`` to ensure LoRA adapters
-            # operate in the correct logical dimension space.
-            kernel_shape_for_lora = tuple(self.original_kernel_shape)
-        else:
-            kernel_shape_for_lora = self.kernel.shape
 
         # LoRA weights should be float32 to avoid the risk of underflow or
         # overflow during fine-tuning.
@@ -316,14 +314,14 @@ class EinsumDense(Layer):
         # original kernel while maintaining the original kernel's dtype.
         self.lora_kernel_a = self.add_weight(
             name="lora_kernel_a",
-            shape=(kernel_shape_for_lora[:-1] + (rank,)),
+            shape=(self.kernel_shape[:-1] + (rank,)),
             initializer=initializers.get(a_initializer),
             dtype="float32",
             regularizer=self.kernel_regularizer,
         )
         self.lora_kernel_b = self.add_weight(
             name="lora_kernel_b",
-            shape=(rank, kernel_shape_for_lora[-1]),
+            shape=(rank, self.kernel_shape[-1]),
             initializer=initializers.get(b_initializer),
             dtype="float32",
             regularizer=self.kernel_regularizer,
@@ -335,113 +333,10 @@ class EinsumDense(Layer):
         self.lora_alpha = lora_alpha if lora_alpha is not None else rank
 
     def save_own_variables(self, store):
-        # Do nothing if the layer isn't yet built
-        if not self.built:
-            return
-        mode = self.quantization_mode
-        if mode not in self.variable_serialization_spec:
-            raise self._quantization_mode_error(mode)
-
-        # GPTQ/AWQ layers are only serializable after calibration. Before
-        # calibration, the quantized variables hold uninitialized values
-        # while the real weights live in the float `_kernel`, which has no
-        # slot in the serialization spec, so saving would silently drop the
-        # actual weights and produce a corrupted model on reload.
-        if (
-            mode == "gptq" and not getattr(self, "is_gptq_calibrated", False)
-        ) or (mode == "awq" and not getattr(self, "is_awq_calibrated", False)):
-            raise ValueError(
-                f"Cannot save layer '{self.name}' because it is quantized "
-                f"with mode '{mode}' but has never been calibrated. Its "
-                "quantized weights are uninitialized, so saving would "
-                "produce a corrupted model. Run calibration first, e.g. via "
-                "`model.quantize(...)` with a quantization layer structure "
-                "that covers this layer, or exclude the layer from "
-                "quantization with `filters`."
-            )
-
-        # The kernel (or its codes) with any LoRA update merged, and the
-        # matching scale and zero point.
-        kernel_value, merged_kernel_scale, merged_kernel_zero = (
-            self._get_weight_with_merged_lora("kernel")
-        )
-        # Variables are stored under their integer position ("0", "1", ...)
-        # within the mode's serialization spec. Each branch picks the value
-        # for the current spec entry (or skips it); the write happens at a
-        # single point so save and load stay position-consistent.
-        idx = 0
-        for name in self.variable_serialization_spec[mode]:
-            if name == "kernel":
-                value = kernel_value
-            elif name == "bias" and self.bias is None:
-                continue
-            elif name == "kernel_zero" and mode == "int4":
-                # For int4, the (LoRA-merged) zero point comes from
-                # `_get_weight_with_merged_lora()` and only exists for
-                # sub-channel quantization.
-                if merged_kernel_zero is None:
-                    continue
-                value = merged_kernel_zero
-            elif name == "g_idx":
-                if not hasattr(self, "g_idx"):
-                    # g_idx only exists for sub-channel int4 quantization
-                    continue
-                value = self.g_idx
-            elif name == "kernel_scale" and mode in ("int4", "int8"):
-                # For int4/int8, the merged LoRA scale (if any) comes from
-                # `_get_weight_with_merged_lora()`
-                value = merged_kernel_scale
-            else:
-                value = getattr(self, name)
-            store[str(idx)] = value
-            idx += 1
+        self._save_serialized_variables(store, "kernel")
 
     def load_own_variables(self, store):
-        if not self.lora_enabled:
-            self._check_load_own_variables(store)
-        # Do nothing if the layer isn't yet built
-        if not self.built:
-            return
-        mode = self.quantization_mode
-        if mode not in self.variable_serialization_spec:
-            raise self._quantization_mode_error(mode)
-
-        # A saved GPTQ/AWQ quantized model will always be calibrated.
-        self.is_gptq_calibrated = mode == "gptq"
-        self.is_awq_calibrated = mode == "awq"
-
-        spec = self.variable_serialization_spec[mode]
-        # Variables are keyed by their integer position ("0", "1", ...) within
-        # the mode's serialization spec. Each branch picks the target variable
-        # for the current spec entry (or skips it); the assign happens at a
-        # single point so save and load stay position-consistent.
-        idx = 0
-        for name in spec:
-            key = str(idx)
-            if name == "kernel":
-                target = self._kernel
-            elif name == "bias" and self.bias is None:
-                continue
-            elif name == "kernel_zero" and not hasattr(self, "kernel_zero"):
-                # kernel_zero only exists for sub-channel int4 quantization
-                continue
-            elif name == "g_idx":
-                if not hasattr(self, "g_idx"):
-                    # g_idx only exists for sub-channel int4 quantization
-                    continue
-                # `g_idx` is stored as `float32` (see build). Cast to the
-                # variable dtype on assign so both legacy `float32`
-                # checkpoints and any `int32`-saved ones load correctly.
-                self.g_idx.assign(ops.cast(store[key], self.g_idx.dtype))
-                idx += 1
-                continue
-            else:
-                target = getattr(self, name)
-            target.assign(store[key])
-            idx += 1
-        if self.lora_enabled:
-            self.lora_kernel_a.assign(ops.zeros(self.lora_kernel_a.shape))
-            self.lora_kernel_b.assign(ops.zeros(self.lora_kernel_b.shape))
+        self._load_serialized_variables(store, "kernel")
 
     def get_config(self):
         base_config = super().get_config()
@@ -669,7 +564,9 @@ def _analyze_einsum_string(equation, bias_axes, input_shape, output_shape):
             `output_axes`: The axes representing output units.
 
     Raises:
-        ValueError: If the einsum `equation` is not in a supported format.
+        ValueError: If the einsum `equation` is not in a supported format, or
+            if the `ndim` of `input_shape` does not fit the input labels of
+            the `equation`.
     """
 
     dot_replaced_string = re.sub(r"\.\.\.", "0", equation)
@@ -679,6 +576,9 @@ def _analyze_einsum_string(equation, bias_axes, input_shape, output_shape):
         "([a-zA-Z]+),([a-zA-Z]+)->([a-zA-Z]+)", dot_replaced_string
     )
     if split_string:
+        _check_input_ndim(
+            equation, input_shape, split_string.group(1), exact=True
+        )
         return _analyze_split_string(
             split_string, bias_axes, input_shape, output_shape
         )
@@ -688,6 +588,7 @@ def _analyze_einsum_string(equation, bias_axes, input_shape, output_shape):
         "0([a-zA-Z]+),([a-zA-Z]+)->0([a-zA-Z]+)", dot_replaced_string
     )
     if split_string:
+        _check_input_ndim(equation, input_shape, split_string.group(1))
         return _analyze_split_string(
             split_string, bias_axes, input_shape, output_shape, left_elided=True
         )
@@ -697,6 +598,7 @@ def _analyze_einsum_string(equation, bias_axes, input_shape, output_shape):
         "([a-zA-Z]{2,})0,([a-zA-Z]+)->([a-zA-Z]+)0", dot_replaced_string
     )
     if split_string:
+        _check_input_ndim(equation, input_shape, split_string.group(1))
         return _analyze_split_string(
             split_string, bias_axes, input_shape, output_shape
         )
@@ -704,6 +606,61 @@ def _analyze_einsum_string(equation, bias_axes, input_shape, output_shape):
     raise ValueError(
         f"Invalid einsum equation '{equation}'. Equations must be in the form "
         "[X],[Y]->[Z], ...[X],[Y]->...[Z], or [X]...,[Y]->[Z]...."
+    )
+
+
+# The accepted forms, with "..." replaced by "0", and the side each elides.
+_EQUATION_FORMS = (
+    ("([a-zA-Z]+),([a-zA-Z]+)->([a-zA-Z]+)", None),
+    ("0([a-zA-Z]+),([a-zA-Z]+)->0([a-zA-Z]+)", "left"),
+    ("([a-zA-Z]{2,})0,([a-zA-Z]+)->([a-zA-Z]+)0", "right"),
+)
+
+
+def _split_equation(equation):
+    """Splits an equation into its inputs, kernel and output labels.
+
+    Returns:
+        `(input_spec, weight_spec, output_spec, ellipsis)`, where
+        `ellipsis` is the side the equation elides: `"left"`, `"right"`
+        or `None`.
+    """
+    dot_replaced_string = re.sub(r"\.\.\.", "0", equation)
+    for pattern, ellipsis in _EQUATION_FORMS:
+        split_string = re.match(pattern, dot_replaced_string)
+        if split_string:
+            return (*split_string.groups(), ellipsis)
+    raise ValueError(
+        f"Invalid einsum equation '{equation}'. Equations must be in the form "
+        "[X],[Y]->[Z], ...[X],[Y]->...[Z], or [X]...,[Y]->[Z]...."
+    )
+
+
+def _check_input_ndim(equation, input_shape, input_spec, exact=False):
+    """Checks that the input `ndim` can hold the labels of the input spec.
+
+    An equation without an ellipsis labels every input axis, so `ndim` must
+    match the number of labels. An equation with an ellipsis labels only some
+    of the axes, so `ndim` must be at least the number of labels.
+
+    Args:
+        equation: The einsum equation string, used in the error message.
+        input_shape: The shape of the input tensor.
+        input_spec: The input labels of the equation, without the ellipsis.
+        exact: A boolean indicating if `ndim` must equal the number of
+            labels instead of being at least that number.
+
+    Raises:
+        ValueError: If the `ndim` of `input_shape` does not fit `input_spec`.
+    """
+    ndim = len(input_shape)
+    num_labels = len(input_spec)
+    if ndim == num_labels or (ndim > num_labels and not exact):
+        return
+    expected = f"ndim={num_labels}" if exact else f"min_ndim={num_labels}"
+    raise ValueError(
+        f"The einsum equation '{equation}' expects an input with {expected}, "
+        f"but received input shape {tuple(input_shape)} with ndim={ndim}."
     )
 
 
@@ -844,6 +801,47 @@ def _analyze_split_string(
     return weight_shape, bias_shape, output_shape, input_axes, output_axes
 
 
+@dataclasses.dataclass(frozen=True)
+class EinsumAxes:
+    """The labels of an `EinsumDense` equation, any ellipsis spelled out.
+
+    Every axis fact the quantization modes read derives from the three
+    label strings. An input or kernel axis is reduced (contracted) when
+    its label is not in the output.
+    """
+
+    inputs: str
+    kernel: str
+    output: str
+
+    @classmethod
+    def from_equation(cls, equation, input_rank):
+        inputs, kernel, output, ellipsis = _split_equation(equation)
+        if ellipsis is not None:
+            # Give the elided axes labels of their own.
+            unused = sorted(
+                set(string.ascii_letters) - set(inputs + kernel + output)
+            )
+            elided = "".join(unused[: input_rank - len(inputs)])
+            if ellipsis == "left":
+                inputs, output = elided + inputs, elided + output
+            else:
+                inputs, output = inputs + elided, output + elided
+        return cls(inputs, kernel, output)
+
+    @property
+    def input_reduced_axes(self):
+        """The input axes the equation contracts."""
+        return tuple(
+            i for i, label in enumerate(self.inputs) if label not in self.output
+        )
+
+    @property
+    def gradient_equation(self):
+        """The einsum that produces the inputs gradient."""
+        return f"{self.output},{self.kernel}->{self.inputs}"
+
+
 def _analyze_quantization_info(equation, input_shape):
     """Analyzes an einsum equation to derive information for quantization.
 
@@ -872,68 +870,8 @@ def _analyze_quantization_info(equation, input_shape):
             scale transpose.
     """
 
-    def get_specs(equation, input_shape):
-        possible_labels = string.ascii_letters
-        dot_replaced_string = re.sub(r"\.\.\.", "0", equation)
-
-        # This is the case where no ellipses are present in the string.
-        split_string = re.match(
-            "([a-zA-Z]+),([a-zA-Z]+)->([a-zA-Z]+)", dot_replaced_string
-        )
-        if split_string is not None:
-            input_spec = split_string.group(1)
-            weight_spec = split_string.group(2)
-            output_spec = split_string.group(3)
-            return input_spec, weight_spec, output_spec
-
-        # This is the case where ellipses are present on the left.
-        split_string = re.match(
-            "0([a-zA-Z]+),([a-zA-Z]+)->0([a-zA-Z]+)", dot_replaced_string
-        )
-        if split_string is not None:
-            input_spec = split_string.group(1)
-            weight_spec = split_string.group(2)
-            output_spec = split_string.group(3)
-            elided = len(input_shape) - len(input_spec)
-            possible_labels = sorted(
-                set(possible_labels)
-                - set(input_spec)
-                - set(weight_spec)
-                - set(output_spec)
-            )
-            # Pad labels on the left to `input_spec` and `output_spec`
-            for i in range(elided):
-                input_spec = possible_labels[i] + input_spec
-                output_spec = possible_labels[i] + output_spec
-            return input_spec, weight_spec, output_spec
-
-        # This is the case where ellipses are present on the right.
-        split_string = re.match(
-            "([a-zA-Z]{2,})0,([a-zA-Z]+)->([a-zA-Z]+)0", dot_replaced_string
-        )
-        if split_string is not None:
-            input_spec = split_string.group(1)
-            weight_spec = split_string.group(2)
-            output_spec = split_string.group(3)
-            elided = len(input_shape) - len(input_spec)
-            possible_labels = sorted(
-                set(possible_labels)
-                - set(input_spec)
-                - set(weight_spec)
-                - set(output_spec)
-            )
-            # Pad labels on the right to `input_spec` and `output_spec`
-            for i in range(elided):
-                input_spec = input_spec + possible_labels[i]
-                output_spec = output_spec + possible_labels[i]
-            return input_spec, weight_spec, output_spec
-
-        raise ValueError(
-            f"Invalid einsum equation '{equation}'. Equations must be in the "
-            "form [X],[Y]->[Z], ...[X],[Y]->...[Z], or [X]...,[Y]->[Z]...."
-        )
-
-    input_spec, weight_spec, output_spec = get_specs(equation, input_shape)
+    axes = EinsumAxes.from_equation(equation, len(input_shape))
+    input_spec, weight_spec, output_spec = axes.inputs, axes.kernel, axes.output
 
     # Determine the axes that should be reduced by the quantizer
     input_reduced_axes = []

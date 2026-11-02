@@ -3,6 +3,7 @@ from keras.src import dtype_policies
 from keras.src import ops
 from keras.src import tree
 from keras.src.api_export import keras_export
+from keras.src.backend.common import get_keras_mask
 from keras.src.saving.keras_saveable import KerasSaveable
 from keras.src.utils.naming import auto_name
 
@@ -54,7 +55,7 @@ class Loss(KerasSaveable):
         return self._dtype
 
     def __call__(self, y_true, y_pred, sample_weight=None):
-        in_mask = backend.get_keras_mask(y_pred)
+        in_mask = get_keras_mask(y_pred)
 
         with backend.name_scope(self.name):
             y_pred = tree.map_structure(
@@ -65,7 +66,7 @@ class Loss(KerasSaveable):
             )
 
             losses = self.call(y_true, y_pred)
-            out_mask = backend.get_keras_mask(losses)
+            out_mask = get_keras_mask(losses)
 
             if in_mask is not None and out_mask is not None:
                 mask = in_mask & out_mask

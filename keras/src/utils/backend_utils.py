@@ -82,6 +82,8 @@ class DynamicBackend:
 
     def __init__(self, backend=None):
         self._backend = backend or backend_module.backend()
+        self._cached_modules = {}
+        self._get_module()
 
     def set_backend(self, backend):
         if (
@@ -96,26 +98,35 @@ class DynamicBackend:
                 f"Received: backend={backend}"
             )
         self._backend = backend
+        self._get_module()
 
     def reset(self):
         self._backend = backend_module.backend()
+        self._get_module()
 
     @property
     def name(self):
         return self._backend
 
-    def __getattr__(self, name):
-        if self._backend == "tensorflow":
-            module = importlib.import_module("keras.src.backend.tensorflow")
-        elif self._backend == "jax":
-            module = importlib.import_module("keras.src.backend.jax")
-        elif self._backend == "torch":
-            module = importlib.import_module("keras.src.backend.torch")
-        elif self._backend == "numpy":
-            module = importlib.import_module("keras.src.backend.numpy")
-        else:
-            module = get_pluggable_backend_module("src", backend=self._backend)
+    def _get_module(self):
+        if self._backend not in self._cached_modules:
+            if self._backend == "tensorflow":
+                module = importlib.import_module("keras.src.backend.tensorflow")
+            elif self._backend == "jax":
+                module = importlib.import_module("keras.src.backend.jax")
+            elif self._backend == "torch":
+                module = importlib.import_module("keras.src.backend.torch")
+            elif self._backend == "numpy":
+                module = importlib.import_module("keras.src.backend.numpy")
+            else:
+                module = get_pluggable_backend_module(
+                    "src", backend=self._backend
+                )
+            self._cached_modules[self._backend] = module
+        return self._cached_modules[self._backend]
 
+    def __getattr__(self, name):
+        module = self._get_module()
         if hasattr(module, name):
             return getattr(module, name)
         # Op implementations live in `keras.src.backend.<backend>.ops` and are

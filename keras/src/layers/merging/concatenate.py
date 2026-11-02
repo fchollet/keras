@@ -1,5 +1,6 @@
 import copy
 
+from keras.src import backend
 from keras.src import ops
 from keras.src.api_export import keras_export
 from keras.src.layers.merging.base_merge import Merge
@@ -99,7 +100,7 @@ class Concatenate(Merge):
                     raise ValueError(err_msg)
 
     def _merge_function(self, inputs):
-        return ops.concatenate(inputs, axis=self.axis)
+        return backend.ops.numpy.concatenate(inputs, axis=self.axis)
 
     def compute_output_shape(self, input_shape):
         if (not isinstance(input_shape, (tuple, list))) or (

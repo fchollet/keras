@@ -1,5 +1,7 @@
 from keras.src import backend
 from keras.src import ops
+from keras.src.backend.common import get_keras_mask
+from keras.src.backend.common import set_keras_mask
 from keras.src.backend.common.keras_tensor import KerasTensor
 from keras.src.layers.layer import Layer
 
@@ -35,26 +37,31 @@ class Merge(Layer):
         output_mask = None
 
         for x in inputs:
-            mask = backend.get_keras_mask(x)
+            mask = get_keras_mask(x)
             if mask is not None:
-                mask = ops.broadcast_to(ops.expand_dims(mask, -1), ops.shape(x))
+                mask = backend.ops.numpy.broadcast_to(
+                    backend.ops.numpy.expand_dims(mask, -1),
+                    backend.ops.shape(x),
+                )
             if output is None:
                 output = x
                 output_mask = mask
                 continue
             if mask is not None:
-                x = ops.where(mask, x, output)
+                x = backend.ops.numpy.where(mask, x, output)
             if output_mask is not None:
-                output = ops.where(output_mask, output, x)
+                output = backend.ops.numpy.where(output_mask, output, x)
             if mask is not None and output_mask is not None:
-                output_mask = ops.logical_or(output_mask, mask)
+                output_mask = backend.ops.numpy.logical_or(output_mask, mask)
             else:
                 output_mask = None
             output = op_fn(output, x)
 
         if output_mask is not None:
-            output_mask = ops.any(output_mask, axis=-1, keepdims=False)
-            backend.set_keras_mask(output, output_mask)
+            output_mask = backend.ops.numpy.any(
+                output_mask, axis=-1, keepdims=False
+            )
+            set_keras_mask(output, output_mask)
         return output
 
     def _compute_elemwise_op_output_shape(self, shape1, shape2):
@@ -148,16 +155,16 @@ class Merge(Layer):
             )
         if self._reshape_required:
             reshaped_inputs = []
-            input_ndims = list(map(ops.ndim, inputs))
+            input_ndims = list(map(backend.ops.numpy.ndim, inputs))
             if None not in input_ndims:
                 # If ranks of all inputs are available,
                 # we simply expand each of them at axis=1
                 # until all of them have the same rank.
                 max_ndim = max(input_ndims)
                 for x in inputs:
-                    x_ndim = ops.ndim(x)
+                    x_ndim = backend.ops.numpy.ndim(x)
                     for _ in range(max_ndim - x_ndim):
-                        x = ops.expand_dims(x, axis=1)
+                        x = backend.ops.numpy.expand_dims(x, axis=1)
                     reshaped_inputs.append(x)
                 return self._merge_function(reshaped_inputs)
             else:
@@ -166,32 +173,45 @@ class Merge(Layer):
                 # batch_size)
                 transposed = False
                 for x in inputs:
-                    x_ndim = ops.ndim(x)
+                    x_ndim = backend.ops.numpy.ndim(x)
 
                     if x_ndim is None:
-                        x_shape = ops.shape(x)
+                        x_shape = backend.ops.shape(x)
                         batch_size = x_shape[0]
 
-                        new_shape = backend.concatenate(
-                            [x_shape[1:], ops.expand_dims(batch_size, axis=-1)]
+                        new_shape = backend.ops.numpy.concatenate(
+                            [
+                                x_shape[1:],
+                                backend.ops.numpy.expand_dims(
+                                    batch_size, axis=-1
+                                ),
+                            ]
                         )
-                        x_transposed = ops.reshape(
+                        x_transposed = backend.ops.numpy.reshape(
                             x,
-                            ops.stack(
-                                [batch_size, ops.prod(x_shape[1:])],
+                            backend.ops.numpy.stack(
+                                [
+                                    batch_size,
+                                    backend.ops.numpy.prod(x_shape[1:]),
+                                ],
                                 axis=0,
                             ),
                         )
-                        x_transposed = ops.transpose(x_transposed, perm=(1, 0))
-                        x_transposed = ops.reshape(x_transposed, new_shape)
+                        x_transposed = backend.ops.numpy.transpose(
+                            x_transposed, perm=(1, 0)
+                        )
+                        x_transposed = backend.ops.numpy.reshape(
+                            x_transposed, new_shape
+                        )
 
                         reshaped_inputs.append(x_transposed)
                         transposed = True
 
                     elif x_ndim > 1:
                         dims = list(range(1, x_ndim)) + [0]
-                        reshaped_inputs.append(ops.transpose(x, perm=dims))
-                        print(dims)
+                        reshaped_inputs.append(
+                            backend.ops.numpy.transpose(x, perm=dims)
+                        )
                         transposed = True
                     else:
                         # We don't transpose inputs if they are 1D vectors or
@@ -199,27 +219,29 @@ class Merge(Layer):
                         reshaped_inputs.append(x)
 
                 y = self._merge_function(reshaped_inputs)
-                y_ndim = ops.ndim(y)
+                y_ndim = backend.ops.numpy.ndim(y)
 
                 if transposed:
                     # If inputs have been transposed, we have to transpose the
                     # output too.
                     if y_ndim is None:
-                        y_shape = ops.shape(y)
-                        y_ndim = ops.shape(y_shape)[0]
+                        y_shape = backend.ops.shape(y)
+                        y_ndim = backend.ops.shape(y_shape)[0]
                         batch_size = y_shape[y_ndim - 1]
-                        new_shape = ops.concatenate(
+                        new_shape = backend.ops.numpy.concatenate(
                             [
-                                ops.expand_dims(batch_size, axis=-1),
+                                backend.ops.numpy.expand_dims(
+                                    batch_size, axis=-1
+                                ),
                                 y_shape[: y_ndim - 1],
                             ]
                         )
-                        y = ops.reshape(y, (-1, batch_size))
-                        y = ops.transpose(y, perm=(1, 0))
-                        y = ops.reshape(y, new_shape)
+                        y = backend.ops.numpy.reshape(y, (-1, batch_size))
+                        y = backend.ops.numpy.transpose(y, perm=(1, 0))
+                        y = backend.ops.numpy.reshape(y, new_shape)
                     elif y_ndim > 1:
                         dims = [y_ndim - 1] + list(range(y_ndim - 1))
-                        y = ops.transpose(y, perm=dims)
+                        y = backend.ops.numpy.transpose(y, perm=dims)
                 return y
         else:
             return self._merge_function(inputs)

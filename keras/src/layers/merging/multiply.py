@@ -1,6 +1,7 @@
 from keras.src import backend
-from keras.src import ops
 from keras.src.api_export import keras_export
+from keras.src.backend.common import get_keras_mask
+from keras.src.backend.common import set_keras_mask
 from keras.src.layers.merging.base_merge import Merge
 
 
@@ -32,29 +33,40 @@ class Multiply(Merge):
     """
 
     def _merge_function(self, inputs):
-        masks = [backend.get_keras_mask(x) for x in inputs]
+        masks = [get_keras_mask(x) for x in inputs]
         has_output_mask = all(mask is not None for mask in masks)
         output = None
         output_mask = None
 
         for x, mask in zip(inputs, masks):
             if mask is not None:
-                mask = ops.broadcast_to(ops.expand_dims(mask, -1), ops.shape(x))
+                mask = backend.ops.numpy.broadcast_to(
+                    backend.ops.numpy.expand_dims(mask, -1),
+                    backend.ops.shape(x),
+                )
                 # Replace 0s with 1s outside of mask.
-                x = ops.where(mask, x, ops.cast(1, x.dtype))
+                x = backend.ops.numpy.where(
+                    mask, x, backend.ops.cast(1, x.dtype)
+                )
                 if has_output_mask:
                     output_mask = (
                         mask
                         if output_mask is None
-                        else ops.logical_or(output_mask, mask)
+                        else backend.ops.numpy.logical_or(output_mask, mask)
                     )
-            output = x if output is None else ops.multiply(output, x)
+            output = (
+                x if output is None else backend.ops.numpy.multiply(output, x)
+            )
 
         if has_output_mask:
             # Replace 1s with 0s outside of mask per standard masking rules.
-            output = ops.where(output_mask, output, ops.cast(0, output.dtype))
-            output_mask = ops.any(output_mask, axis=-1, keepdims=False)
-            backend.set_keras_mask(output, output_mask)
+            output = backend.ops.numpy.where(
+                output_mask, output, backend.ops.cast(0, output.dtype)
+            )
+            output_mask = backend.ops.numpy.any(
+                output_mask, axis=-1, keepdims=False
+            )
+            set_keras_mask(output, output_mask)
         return output
 
 

@@ -9,6 +9,7 @@ import torch
 from keras.src import Sequential
 from keras.src import backend
 from keras.src import layers
+from keras.src import models
 from keras.src import testing
 from keras.src.distribution import distribution_lib
 from keras.src.trainers.data_adapters import data_adapter_test_base
@@ -543,6 +544,39 @@ class TestTFDatasetAdapter(data_adapter_test_base.DataAdapterTest):
             expected_super_batches=2,
             has_partial_batch=True,
         )
+
+    @pytest.mark.skipif(
+        backend.backend() != "tensorflow",
+        reason="TensorFlow only",
+    )
+    def test_fit_unknown_rank_dataset_steps_per_execution(self):
+        def make_example(_):
+            return np.ones((3,), dtype=np.float32), np.float32(1)
+
+        def map_fn(index):
+            return tf.numpy_function(
+                make_example, [index], [tf.float32, tf.float32]
+            )
+
+        def map_fn_with_shape(index):
+            x, y = map_fn(index)
+            return tf.ensure_shape(x, (3,)), tf.ensure_shape(y, ())
+
+        def build_model():
+            inputs = layers.Input(shape=(3,))
+            model = models.Model(inputs, layers.Dense(1)(inputs))
+            model.compile(optimizer="sgd", loss="mse", steps_per_execution=2)
+            return model
+
+        dataset = tf.data.Dataset.range(2).map(map_fn).batch(1)
+        with self.assertRaisesRegex(
+            ValueError, "unknown rank.*tf.ensure_shape"
+        ):
+            build_model().fit(dataset, epochs=1, verbose=0)
+
+        # Specifying the shapes makes multi-step training work.
+        dataset = tf.data.Dataset.range(2).map(map_fn_with_shape).batch(1)
+        build_model().fit(dataset, epochs=1, verbose=0)
 
 
 @pytest.mark.skipif(

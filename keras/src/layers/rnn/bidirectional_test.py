@@ -319,6 +319,92 @@ class SimpleRNNTest(testing.TestCase):
         for out, shape in zip(output, output_shape):
             self.assertEqual(out.shape, shape)
 
+    def test_output_shape_with_asymmetric_backward_layer(self):
+        # An explicit `backward_layer` may have a different number of units
+        # from the forward layer.
+        x = np.array([[[101, 202], [303, 404]]])
+        forward_units, backward_units = 3, 5
+
+        # merge_mode="concat" concatenates along the last axis, so the width
+        # is the sum of the two, not twice the forward one.
+        layer = layers.Bidirectional(
+            layers.LSTM(forward_units, return_sequences=True),
+            backward_layer=layers.LSTM(
+                backward_units, return_sequences=True, go_backwards=True
+            ),
+            merge_mode="concat",
+        )
+        output = layer(x)
+        self.assertEqual(
+            layer.compute_output_shape(x.shape), tuple(output.shape)
+        )
+        self.assertEqual(output.shape[-1], forward_units + backward_units)
+
+        # merge_mode=None returns the two sequences separately, so each keeps
+        # its own width.
+        layer = layers.Bidirectional(
+            layers.LSTM(forward_units, return_sequences=True),
+            backward_layer=layers.LSTM(
+                backward_units, return_sequences=True, go_backwards=True
+            ),
+            merge_mode=None,
+        )
+        output = layer(x)
+        output_shape = layer.compute_output_shape(x.shape)
+        for out, shape in zip(output, output_shape):
+            self.assertEqual(tuple(out.shape), tuple(shape))
+
+        # return_state appends the forward states then the backward states,
+        # which are sized by their own layers.
+        for merge_mode in ["concat", None]:
+            layer = layers.Bidirectional(
+                layers.LSTM(forward_units, return_state=True),
+                backward_layer=layers.LSTM(
+                    backward_units, return_state=True, go_backwards=True
+                ),
+                merge_mode=merge_mode,
+            )
+            output = layer(x)
+            output_shape = layer.compute_output_shape(x.shape)
+            self.assertEqual(len(output), len(output_shape))
+            for out, shape in zip(output, output_shape):
+                self.assertEqual(tuple(out.shape), tuple(shape))
+
+    def test_asymmetric_backward_layer_rejected_for_elementwise_merge(self):
+        # "sum", "mul" and "ave" combine the two directions elementwise, so
+        # differing widths cannot work.
+        x = np.array([[[101, 202], [303, 404]]])
+        for merge_mode in ["sum", "mul", "ave"]:
+            layer = layers.Bidirectional(
+                layers.LSTM(3, return_sequences=True),
+                backward_layer=layers.LSTM(
+                    5, return_sequences=True, go_backwards=True
+                ),
+                merge_mode=merge_mode,
+            )
+            with self.assertRaisesRegex(
+                ValueError, "must produce the same number of units"
+            ):
+                layer.compute_output_shape(x.shape)
+            with self.assertRaisesRegex(
+                ValueError, "must produce the same number of units"
+            ):
+                layer(x)
+
+        # Matching widths remain valid for the same merge modes.
+        for merge_mode in ["sum", "mul", "ave"]:
+            layer = layers.Bidirectional(
+                layers.LSTM(3, return_sequences=True),
+                backward_layer=layers.LSTM(
+                    3, return_sequences=True, go_backwards=True
+                ),
+                merge_mode=merge_mode,
+            )
+            output = layer(x)
+            self.assertEqual(
+                layer.compute_output_shape(x.shape), tuple(output.shape)
+            )
+
     def test_keeps_use_cudnn(self):
         # keep use_cudnn if the layer has it
         for rnn_class in [layers.GRU, layers.LSTM]:

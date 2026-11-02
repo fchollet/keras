@@ -19,7 +19,7 @@ from keras.src.utils import traceback_utils
 from keras.src.utils.python_utils import pythonify_logs
 
 
-class TensorFlowTrainer(base_trainer.BaseTrainer):
+class Trainer(base_trainer.BaseTrainer):
     def __init__(self):
         super().__init__()
         self.train_function = None

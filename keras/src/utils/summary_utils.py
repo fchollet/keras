@@ -11,8 +11,8 @@ import rich.markup
 # for below imports
 import rich.table
 
-from keras.src import backend
 from keras.src import tree
+from keras.src.backend.common import standardize_dtype
 from keras.src.utils import dtype_utils
 from keras.src.utils import io_utils
 
@@ -25,7 +25,7 @@ def count_params(weights):
 @functools.lru_cache(512)
 def _compute_memory_size(shape, dtype):
     weight_counts = math.prod(shape)
-    dtype = backend.standardize_dtype(dtype)
+    dtype = standardize_dtype(dtype)
     per_param_size = dtype_utils.dtype_size(dtype)
     return weight_counts * per_param_size
 
@@ -460,7 +460,7 @@ def print_quantization_summary(model, verbose=True):
 
     def _weight_bytes(weight):
         num_elements = math.prod(weight.shape)
-        dtype = backend.standardize_dtype(weight.dtype)
+        dtype = standardize_dtype(weight.dtype)
         return num_elements * dtype_utils.dtype_size(dtype) // 8
 
     rows = []
@@ -468,13 +468,12 @@ def print_quantization_summary(model, verbose=True):
     total_float_bytes = 0
     total_logical_params = 0
     for layer in model._flatten_layers():
-        # Only leaf layers (those without sub-layers) are quantizable.
-        if len(list(layer._flatten_layers())) != 1:
-            continue
         mode = layer.quantization_mode
         if mode is None:
             continue
-        weights = list(layer.weights)
+        # The layer's own variables: a container has none, and a layer that
+        # owns a sub-layer (a `Dense` with a layer activation) has its own.
+        weights = layer._trainable_variables + layer._non_trainable_variables
         if not weights:
             continue
 
@@ -486,20 +485,45 @@ def print_quantization_summary(model, verbose=True):
         strategy = strategy_registry.get_strategy(mode)
         # A layer that defines no quantization geometry (a custom layer
         # that stores its own weights) has no view.
+        geometry = layer._quantization_geometry()
         quantized_weights = (
             strategy.quantized_weights(layer)
-            if strategy is not None
-            and layer._quantization_geometry() is not None
+            if strategy is not None and geometry is not None
             else ()
+        )
+        keeps_float_weight = (
+            strategy is not None
+            and geometry is not None
+            and not strategy.owns_weight_storage
         )
         if quantized_weights:
             # The mode stores integer codes: count the weights they stand
             # for, which a packed layout stores several to a byte. A layer
             # may hold more than one table (an untied reversible lookup).
-            primary = quantized_weights[0].codes
             logical_params = sum(math.prod(q.shape) for q in quantized_weights)
-            storage_bytes = sum(
-                _weight_bytes(q.codes) for q in quantized_weights
+            # The bytes of every stored tensor of every view. Views of one
+            # layer can share a tensor (the `g_idx` of an untied lookup), so
+            # each tensor counts once.
+            stored = {}
+            for q in quantized_weights:
+                for tensor in (
+                    q.codes,
+                    q.scale,
+                    q.zero_point,
+                    q.g_idx,
+                    q.input_scales,
+                ):
+                    if tensor is not None:
+                        stored[id(tensor)] = tensor
+            storage_bytes = sum(_weight_bytes(t) for t in stored.values())
+            storage_dtype = standardize_dtype(quantized_weights[0].codes.dtype)
+        elif keeps_float_weight:
+            # The mode keeps the float weight (float8). Its scale and
+            # history variables are not weight storage.
+            logical_params = math.prod(geometry.weight_shape)
+            storage_dtype = standardize_dtype(layer.variable_dtype)
+            storage_bytes = (
+                logical_params * dtype_utils.dtype_size(storage_dtype) // 8
             )
         else:
             # No view: the primary weight is the largest one, stored one
@@ -507,15 +531,16 @@ def print_quantization_summary(model, verbose=True):
             primary = max(weights, key=lambda w: math.prod(w.shape))
             logical_params = math.prod(primary.shape)
             storage_bytes = _weight_bytes(primary)
-        storage_dtype = backend.standardize_dtype(primary.dtype)
+            storage_dtype = standardize_dtype(primary.dtype)
         float_bytes = logical_params * 4  # float32 baseline.
 
         rows.append(
             {
                 "path": layer.path or layer.name,
-                "policy": layer.dtype_policy.name,
+                "policy": layer._own_dtype_policy.name,
                 "dtype": storage_dtype,
                 "bytes": storage_bytes,
+                "keeps_float_weight": keeps_float_weight,
             }
         )
         total_quantized_bytes += storage_bytes
@@ -527,10 +552,11 @@ def print_quantization_summary(model, verbose=True):
         lines.append("No quantized layers found.")
     else:
         for row in rows:
+            kept = ", float weight kept" if row["keeps_float_weight"] else ""
             lines.append(f"Layer: {row['path']}")
             lines.append(f"  dtype policy : {row['policy']}")
             lines.append(
-                f"  weight store : {row['dtype']} ({row['bytes']} bytes)"
+                f"  weight store : {row['dtype']} ({row['bytes']} bytes{kept})"
             )
         lines.append("-" * 65)
         lines.append(f"Quantized layers : {len(rows)}")

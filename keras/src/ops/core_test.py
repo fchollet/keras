@@ -15,6 +15,7 @@ from keras.src import random
 from keras.src import testing
 from keras.src import tree
 from keras.src.backend.common import dtypes
+from keras.src.backend.common import standardize_dtype
 from keras.src.backend.common.keras_tensor import KerasTensor
 from keras.src.backend.common.remat import RematScope
 from keras.src.layers.core import input_layer
@@ -721,6 +722,20 @@ class CoreOpsCorrectnessTest(testing.TestCase):
             dz_dx = ops.grad(log1pexp_nan)(x)
             self.assertTrue(ops.isnan(dz_dx))
 
+    def test_custom_gradient_forward_error(self):
+        calls = 0
+
+        @ops.custom_gradient
+        def failing(x):
+            nonlocal calls
+            calls += 1
+            raise RuntimeError("Forward failed.")
+
+        with self.assertRaisesRegex(RuntimeError, "Forward failed."):
+            failing(ops.ones((3,)))
+        # The forward runs once and its error reaches the caller.
+        self.assertEqual(calls, 1)
+
     def test_dynamic_slice(self):
         def cond(index, inputs, sum):
             return index < 10
@@ -739,7 +754,7 @@ class CoreOpsCorrectnessTest(testing.TestCase):
         def body_fun(i, x):
             return x + i
 
-        initial_value = np.array(0)
+        initial_value = 0
         result = core.fori_loop(0, 10, body_fun, initial_value)
         self.assertAllClose(result, 45)
 
@@ -1770,7 +1785,7 @@ class ConvertToTensorFloatxTest(testing.TestCase):
         """
         backend.set_floatx(floatx)
         for x in ([1, 2, 3], 3, (1, 2)):
-            dtype = backend.standardize_dtype(ops.convert_to_tensor(x).dtype)
+            dtype = standardize_dtype(ops.convert_to_tensor(x).dtype)
             self.assertIn(
                 dtype,
                 dtypes.INT_TYPES,
@@ -1947,21 +1962,21 @@ class CoreOpsBehaviorTests(testing.TestCase):
         # backend, torch.export would otherwise lift the float64
         # constant into the graph before the cast runs.
         t = ops.convert_to_tensor(1.5, dtype="float32")
-        self.assertEqual(backend.standardize_dtype(t.dtype), "float32")
+        self.assertEqual(standardize_dtype(t.dtype), "float32")
         t = ops.convert_to_tensor(1.5, dtype="float16")
-        self.assertEqual(backend.standardize_dtype(t.dtype), "float16")
+        self.assertEqual(standardize_dtype(t.dtype), "float16")
 
     def test_convert_to_tensor_python_int_with_dtype(self):
         t = ops.convert_to_tensor(7, dtype="int16")
-        self.assertEqual(backend.standardize_dtype(t.dtype), "int16")
+        self.assertEqual(standardize_dtype(t.dtype), "int16")
         t = ops.convert_to_tensor(7, dtype="float32")
-        self.assertEqual(backend.standardize_dtype(t.dtype), "float32")
+        self.assertEqual(standardize_dtype(t.dtype), "float32")
 
     def test_convert_to_tensor_python_bool_with_dtype(self):
         t = ops.convert_to_tensor(True, dtype="float32")
-        self.assertEqual(backend.standardize_dtype(t.dtype), "float32")
+        self.assertEqual(standardize_dtype(t.dtype), "float32")
         t = ops.convert_to_tensor(True)
-        self.assertEqual(backend.standardize_dtype(t.dtype), "bool")
+        self.assertEqual(standardize_dtype(t.dtype), "bool")
 
     @pytest.mark.skipif(
         backend.backend() != "torch",

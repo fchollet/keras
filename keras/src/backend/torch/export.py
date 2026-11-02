@@ -14,7 +14,7 @@ from keras.src.utils.module_utils import tensorflow as tf
 from keras.src.utils.module_utils import torch_xla
 
 
-class TorchExportArchive(BaseSavedModelExportArchive):
+class SavedModelExportArchive(BaseSavedModelExportArchive):
     """Torch backend implementation of SavedModel export archive."""
 
     def _backend_track_layer(self, layer):

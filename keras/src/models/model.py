@@ -11,7 +11,7 @@ from keras.src.layers.core.input_layer import InputLayer
 from keras.src.layers.layer import Layer
 from keras.src.models.variable_mapping import map_saveable_variables
 from keras.src.quantizers import strategy_registry
-from keras.src.quantizers.gptq_core import find_layers_in_block
+from keras.src.quantizers.calibration_run import find_layers_in_block
 from keras.src.quantizers.quantization_config import validate_and_resolve_config
 from keras.src.quantizers.report import QuantizationReport
 from keras.src.quantizers.utils import should_quantize_layer
@@ -22,15 +22,13 @@ from keras.src.utils import traceback_utils
 from keras.src.utils.module_utils import get_pluggable_backend_module
 
 if backend.backend() == "tensorflow":
-    from keras.src.backend.tensorflow.trainer import (
-        TensorFlowTrainer as Trainer,
-    )
+    from keras.src.backend.tensorflow.trainer import Trainer
 elif backend.backend() == "jax":
-    from keras.src.backend.jax.trainer import JAXTrainer as Trainer
+    from keras.src.backend.jax.trainer import Trainer
 elif backend.backend() == "torch":
-    from keras.src.backend.torch.trainer import TorchTrainer as Trainer
+    from keras.src.backend.torch.trainer import Trainer
 elif backend.backend() == "numpy":
-    from keras.src.backend.numpy.trainer import NumpyTrainer as Trainer
+    from keras.src.backend.numpy.trainer import Trainer
 else:
     backend_trainer_module = get_pluggable_backend_module("src.trainer")
     Trainer = getattr(backend_trainer_module, "Trainer")
@@ -677,7 +675,7 @@ class Model(Trainer, Layer):
                 report.add_skipped(path, QuantizationReport.SKIP_NO_SUPPORT)
                 continue
             report.add_quantized(
-                path, layer.quantization_mode, layer.dtype_policy.name
+                path, layer.quantization_mode, layer._own_dtype_policy.name
             )
             graph_modified = True
 
@@ -708,10 +706,13 @@ class Model(Trainer, Layer):
     def quantization_summary(self, verbose=True):
         """Print a per-quantized-layer summary of the model.
 
-        For every quantized layer this reports the layer path, its dtype
-        policy, and the storage dtype and byte size of its primary quantized
-        weight. It also prints totals comparing the quantized weight storage
-        against a float32 baseline.
+        For every quantized layer this reports the layer path, its own dtype
+        policy (its entry, for a layer that holds a `DTypePolicyMap`), the
+        storage dtype of its quantized weight, and the bytes the weight
+        stores: codes, scale, zero point, group index and input scales. A
+        mode that keeps the float weight (float8) reports that weight and
+        says so. It also prints totals comparing the quantized weight
+        storage against a float32 baseline.
 
         Args:
             verbose: Whether to print the summary. Defaults to `True`. The

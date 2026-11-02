@@ -1,5 +1,6 @@
 from keras.src import backend
 from keras.src.api_export import keras_export
+from keras.src.backend.common import is_int_dtype
 from keras.src.layers.preprocessing.image_preprocessing.base_image_preprocessing_layer import (  # noqa: E501
     BaseImagePreprocessingLayer,
 )
@@ -125,7 +126,7 @@ class Resizing(BaseImagePreprocessingLayer):
         )
         if resized.dtype == images.dtype:
             return resized
-        if backend.is_int_dtype(images.dtype):
+        if is_int_dtype(images.dtype):
             resized = self.backend.ops.numpy.round(resized)
         return _saturate_cast(resized, images.dtype, self.backend)
 

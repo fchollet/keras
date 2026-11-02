@@ -12,7 +12,7 @@ from keras.src.export.saved_model_export_archive import (
 from keras.src.utils.module_utils import tensorflow as tf
 
 
-class JaxExportArchive(BaseSavedModelExportArchive):
+class SavedModelExportArchive(BaseSavedModelExportArchive):
     """JAX backend implementation of SavedModel export archive."""
 
     def _backend_init(self):

@@ -398,7 +398,7 @@ class ModelCheckpoint(MonitorCallback):
         The tie-breaker is put in the logic as best effort to return the most
         recent, and to avoid nondeterministic result.
 
-        Modified time of a file is obtained with `os.path.getmtime()`.
+        Modified time of a file is obtained with `file_utils.getmtime()`.
 
         This utility function is best demonstrated via an example:
 
@@ -439,11 +439,11 @@ class ModelCheckpoint(MonitorCallback):
         file_path_with_largest_file_name = None
 
         if file_utils.exists(dir_name):
-            for file_name in os.listdir(dir_name):
+            for file_name in file_utils.listdir(dir_name):
                 # Only consider if `file_name` matches the pattern.
                 if re.match(base_name_regex, file_name):
-                    file_path = os.path.join(dir_name, file_name)
-                    mod_time = os.path.getmtime(file_path)
+                    file_path = file_utils.join(dir_name, file_name)
+                    mod_time = file_utils.getmtime(file_path)
                     if (
                         file_path_with_largest_file_name is None
                         or file_path > file_path_with_largest_file_name

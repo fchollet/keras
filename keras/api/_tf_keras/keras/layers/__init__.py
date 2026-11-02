@@ -20,6 +20,9 @@ from keras.src.layers.attention.attention import Attention as Attention
 from keras.src.layers.attention.grouped_query_attention import (
     GroupedQueryAttention as GroupQueryAttention,
 )
+from keras.src.layers.attention.grouped_query_attention import (
+    GroupedQueryAttention as GroupedQueryAttention,
+)
 from keras.src.layers.attention.multi_head_attention import (
     MultiHeadAttention as MultiHeadAttention,
 )
@@ -225,6 +228,9 @@ from keras.src.layers.preprocessing.image_preprocessing.max_num_bounding_box imp
 )
 from keras.src.layers.preprocessing.image_preprocessing.mix_up import (
     MixUp as MixUp,
+)
+from keras.src.layers.preprocessing.image_preprocessing.mosaic import (
+    Mosaic as Mosaic,
 )
 from keras.src.layers.preprocessing.image_preprocessing.rand_augment import (
     RandAugment as RandAugment,

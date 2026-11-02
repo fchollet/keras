@@ -3,8 +3,8 @@ import jax.numpy as jnp
 import jax.scipy as jsp
 
 from keras.src.backend import config
-from keras.src.backend import standardize_dtype
 from keras.src.backend.common import dtypes
+from keras.src.backend.common import standardize_dtype
 from keras.src.backend.jax.ops.core import cast
 from keras.src.backend.jax.ops.core import convert_to_tensor
 
@@ -84,6 +84,9 @@ def qr(x, mode="reduced"):
 
 
 def solve(a, b):
+    if b.ndim == a.ndim - 1:
+        b = jnp.expand_dims(b, axis=-1)
+        return jnp.linalg.solve(a, b).squeeze(axis=-1)
     return jnp.linalg.solve(a, b)
 
 

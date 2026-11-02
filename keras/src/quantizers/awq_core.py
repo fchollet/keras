@@ -10,12 +10,12 @@ from absl import logging
 
 from keras.src import ops
 from keras.src import utils as keras_utils
-from keras.src.quantizers.awq import AWQ
-from keras.src.quantizers.gptq_core import _execution_stages
-from keras.src.quantizers.gptq_core import calibration_no_grad_scope
-from keras.src.quantizers.gptq_core import find_layers_in_block
-from keras.src.quantizers.gptq_core import get_calibration_call_attribute
-from keras.src.quantizers.gptq_core import get_dataloader
+from keras.src.quantizers.awq import AWQCalibrator
+from keras.src.quantizers.calibration_run import _execution_stages
+from keras.src.quantizers.calibration_run import calibration_no_grad_scope
+from keras.src.quantizers.calibration_run import find_layers_in_block
+from keras.src.quantizers.calibration_run import get_dataloader
+from keras.src.quantizers.capture import calibration_scope
 from keras.src.quantizers.utils import should_quantize_layer
 
 
@@ -23,14 +23,16 @@ from keras.src.quantizers.utils import should_quantize_layer
 def stream_activations(layers_map, awq_objects, execution_trace=None):
     """Context manager to capture activations for AWQ calibration.
 
-    Temporarily patches each layer's dispatched forward method
-    (`layer.quantized_call` if the layer is already in a quantized mode,
-    `layer.call` otherwise) to capture activation statistics for computing
-    per-channel scaling factors.
+    Registers a calibration capture (`keras.src.quantizers.capture`) on
+    each layer, which the dispatch machinery runs before every forward
+    pass, whichever forward that is, to capture activation statistics for
+    computing per-channel scaling factors. Nothing on the layers is
+    rebound.
 
     Args:
         layers_map: Dict[str, Layer]. Mapping from layer names to layers.
-        awq_objects: Dict[str, AWQ]. Mapping from names to AWQ instances.
+        awq_objects: Dict[str, AWQCalibrator]. Mapping from names to AWQ
+            calibrators.
         execution_trace: Optional dict. When provided, each layer's FIRST
             hook invocation records `{name: (call_index, input_tensor)}`
             into it - the block-level execution order and the identity of
@@ -40,36 +42,26 @@ def stream_activations(layers_map, awq_objects, execution_trace=None):
             should drop the trace after use.
 
     Yields:
-        None: The patched state is active only within the `with` block.
+        None: The captures are active only within the `with` block.
     """
-    original_calls = {}
     call_counter = [0]
 
-    def create_hook(name, original_call_func):
-        def hook(*args, **kwargs):
-            inp = args[0] if args else kwargs["inputs"]
+    def create_capture(name):
+        def capture(inp):
             if execution_trace is not None and name not in execution_trace:
                 # Record block-level execution order and the input tensor's
                 # identity on the first call (a live reference is kept so
                 # the id cannot be recycled while tracing).
                 execution_trace[name] = (call_counter[0], inp)
                 call_counter[0] += 1
-            num_features = awq_objects[name].rows
-            input_2d = ops.reshape(inp, (-1, num_features))
-            awq_objects[name].update_activation_magnitudes(input_2d)
-            return original_call_func(*args, **kwargs)
+            awq_objects[name].observe(inp)
 
-        return hook
+        return capture
 
-    try:
-        for name, layer in layers_map.items():
-            attr = get_calibration_call_attribute(layer)
-            original_calls[name] = (attr, getattr(layer, attr))
-            setattr(layer, attr, create_hook(name, original_calls[name][1]))
+    with calibration_scope(
+        {layer: create_capture(name) for name, layer in layers_map.items()}
+    ):
         yield
-    finally:
-        for name, (attr, original_call) in original_calls.items():
-            setattr(layers_map[name], attr, original_call)
 
 
 def apply_awq_layerwise(dataloader, config, structure, filters=None):
@@ -129,9 +121,9 @@ def apply_awq_layerwise(dataloader, config, structure, filters=None):
         else:
             logging.info(f"Found layers: {list(sub_layers_map.keys())}")
 
-            # Create AWQ objects for each layer
+            # Create an AWQ calibrator for each layer
             awq_objects = {
-                name: AWQ(layer, config)
+                name: AWQCalibrator(layer, config)
                 for name, layer in sub_layers_map.items()
             }
 
@@ -166,15 +158,17 @@ def apply_awq_layerwise(dataloader, config, structure, filters=None):
                     }
                     stage_objects = {}
                     for name in stage_names:
-                        awq_objects[name].free()
-                        awq_objects[name] = AWQ(sub_layers_map[name], config)
+                        # Drop the stale statistics before allocating new ones.
+                        del awq_objects[name]
+                        awq_objects[name] = AWQCalibrator(
+                            sub_layers_map[name], config
+                        )
                         stage_objects[name] = awq_objects[name]
                     run_calibration_sweep(stage_map, stage_objects)
 
                 for name in stage_names:
                     logging.info(f"Quantizing {name}...")
-                    awq_objects[name].quantize_layer()
-                    awq_objects[name].free()
+                    awq_objects.pop(name).quantize()
 
             del awq_objects
 

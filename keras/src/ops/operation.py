@@ -9,6 +9,7 @@ from keras.src.api_export import keras_export
 from keras.src.backend import KerasTensor
 from keras.src.backend.common import remat
 from keras.src.backend.common.keras_tensor import any_symbolic_tensors
+from keras.src.backend.common.symbolic_scope import in_symbolic_scope
 from keras.src.backend.config import is_nnx_enabled
 from keras.src.ops.node import Node
 from keras.src.saving.keras_saveable import KerasSaveable
@@ -19,6 +20,10 @@ from keras.src.utils.naming import auto_name
 
 @keras_export("keras.Operation")
 class Operation(KerasSaveable):
+    # A callable that receives the arguments of every forward pass, installed
+    # by `keras.src.quantizers.capture.calibration_scope`; `None` otherwise.
+    _calibration_capture = None
+
     def __init__(self, name=None):
         if name is None:
             name = auto_name(self.__class__.__name__)
@@ -36,27 +41,10 @@ class Operation(KerasSaveable):
     @traceback_utils.filter_traceback
     def __call__(self, *args, **kwargs):
         if traceback_utils.is_traceback_filtering_enabled():
-            if any_symbolic_tensors(args, kwargs):
-                call_fn = self.symbolic_call
-            else:
-                if self._remat_mode:
-                    if getattr(self, "quantization_mode", None) is not None:
-                        call_fn = self.rematerialized_call(
-                            self.quantized_call,
-                            *args,
-                            **kwargs,
-                        )
-                    else:
-                        call_fn = self.rematerialized_call(
-                            self.call, *args, **kwargs
-                        )
-                else:
-                    if getattr(self, "quantization_mode", None) is not None:
-                        call_fn = self.quantized_call
-                    else:
-                        call_fn = self.call
             try:
-                return call_fn(*args, **kwargs)
+                if any_symbolic_tensors(args, kwargs):
+                    return self.symbolic_call(*args, **kwargs)
+                return self._dispatch_call(*args, **kwargs)
             except Exception as e:
                 if not getattr(e, "_keras_call_info_injected", False):
                     raise traceback_utils.inject_argument_info_in_error(
@@ -71,20 +59,33 @@ class Operation(KerasSaveable):
         # Plain flow.
         if any_symbolic_tensors(args, kwargs):
             return self.symbolic_call(*args, **kwargs)
-        elif self._remat_mode:
-            if getattr(self, "quantization_mode", None) is not None:
-                return self.rematerialized_call(
-                    self.quantized_call, *args, **kwargs
-                )(*args, **kwargs)
-            else:
-                return self.rematerialized_call(self.call, *args, **kwargs)(
-                    *args, **kwargs
-                )
+        return self._dispatch_call(*args, **kwargs)
+
+    def _dispatch_call(self, *args, **kwargs):
+        """Runs the forward pass this operation dispatches to.
+
+        This is the one place that selects the forward: `quantized_call`
+        under a quantization mode, `call` otherwise, wrapped for
+        rematerialization when enabled. `__call__` and `stateless_call`
+        both route through it. A calibration capture registered on the
+        operation receives the forward's arguments first, so it sees every
+        dispatched forward, whichever one that is. The capture runs outside
+        the rematerialization wrapper, so it sees the arguments the dispatch
+        receives rather than remat tracers. Only forwards that arrive
+        through `__call__` or `stateless_call` are observed. Forwards
+        traced for shape inference (`compute_output_spec`, which a symbolic
+        call of an enclosing layer runs) are not.
+        """
+        capture = self._calibration_capture
+        if capture is not None and not in_symbolic_scope():
+            capture(*args, **kwargs)
+        if getattr(self, "quantization_mode", None) is not None:
+            call_fn = self.quantized_call
         else:
-            if getattr(self, "quantization_mode", None) is not None:
-                return self.quantized_call(*args, **kwargs)
-            else:
-                return self.call(*args, **kwargs)
+            call_fn = self.call
+        if self._remat_mode:
+            call_fn = self.rematerialized_call(call_fn, *args, **kwargs)
+        return call_fn(*args, **kwargs)
 
     def symbolic_call(self, *args, **kwargs):
         # Perform shape/dtype inference.

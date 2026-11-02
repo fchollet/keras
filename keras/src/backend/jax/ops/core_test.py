@@ -9,11 +9,10 @@ import keras
 from keras.src import backend
 from keras.src import testing
 from keras.src.backend.config import is_nnx_enabled
+from keras.src.backend.jax.ops.core import Variable
 
 if is_nnx_enabled():
     from flax import nnx
-
-    from keras.src.backend.jax.ops.core import NnxVariable
 
 
 @pytest.mark.skipif(
@@ -31,9 +30,8 @@ class NnxVariableTest(testing.TestCase):
         class NNXModel(nnx.Module):
             def __init__(self, rngs):
                 self.linear = nnx.Linear(2, 3, rngs=rngs)
-                # Use NnxVariable directly as KerasJaxVariable
-                # might be JaxVariable if NNX is disabled globally.
-                self.custom_variable = NnxVariable(jnp.ones((1, 3)))
+                # `Variable` is automatically the NNX specific sub-class.
+                self.custom_variable = Variable(jnp.ones((1, 3)))
 
             def __call__(self, x):
                 return self.linear(x) + self.custom_variable

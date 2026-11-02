@@ -1242,50 +1242,42 @@ class MathOpsCorrectnessTest(testing.TestCase):
     @parameterized.named_parameters(named_product(BACKEND_AGNOSTIC_OPS))
     def test_lgamma_operation_dtype(self, backend_agnostic_ops):
         backend.config._set_use_backend_agnostic_ops(backend_agnostic_ops)
-        try:
-            for dtype in ("float32", "float64"):
-                sample_values = np.array(
-                    [1.0, 2.0, 3.0, 4.0, 5.0, 0.5, 1.5, 2.5, 3.5, 10.0],
-                    dtype=dtype,
-                )
-                expected_output = scipy.special.gammaln(sample_values)
-                output_from_lgamma_op = kmath.lgamma(sample_values)
-                self.assertAllClose(
-                    output_from_lgamma_op, expected_output, atol=1e-4
-                )
-        finally:
-            backend.config._set_use_backend_agnostic_ops(False)
-
-    @parameterized.named_parameters(named_product(BACKEND_AGNOSTIC_OPS))
-    def test_lgamma_operation_edge_cases(self, backend_agnostic_ops):
-        backend.config._set_use_backend_agnostic_ops(backend_agnostic_ops)
-        try:
-            edge_values = np.array(
-                [-0.5, -1.5, -2.5, 1e-5, 50.0, 100.0, float("inf")],
-                dtype=np.float64,
-            )
-            expected_output = scipy.special.gammaln(edge_values)
-            output_from_edge_lgamma_op = kmath.lgamma(edge_values)
-            self.assertAllClose(
-                output_from_edge_lgamma_op, expected_output, atol=1e-4
-            )
-        finally:
-            backend.config._set_use_backend_agnostic_ops(False)
-
-    @parameterized.named_parameters(named_product(BACKEND_AGNOSTIC_OPS))
-    def test_lgamma_operation_basic(self, backend_agnostic_ops):
-        backend.config._set_use_backend_agnostic_ops(backend_agnostic_ops)
-        try:
+        self.addCleanup(backend.config._set_use_backend_agnostic_ops, False)
+        for dtype in ("float32", "float64"):
             sample_values = np.array(
-                [1.0, 2.0, 3.0, 4.0, 5.0, 0.5, 1.5, 2.5, 3.5, 10.0]
+                [1.0, 2.0, 3.0, 4.0, 5.0, 0.5, 1.5, 2.5, 3.5, 10.0],
+                dtype=dtype,
             )
             expected_output = scipy.special.gammaln(sample_values)
             output_from_lgamma_op = kmath.lgamma(sample_values)
             self.assertAllClose(
                 output_from_lgamma_op, expected_output, atol=1e-4
             )
-        finally:
-            backend.config._set_use_backend_agnostic_ops(False)
+
+    @parameterized.named_parameters(named_product(BACKEND_AGNOSTIC_OPS))
+    def test_lgamma_operation_edge_cases(self, backend_agnostic_ops):
+        backend.config._set_use_backend_agnostic_ops(backend_agnostic_ops)
+        self.addCleanup(backend.config._set_use_backend_agnostic_ops, False)
+        edge_values = np.array(
+            [-0.5, -1.5, -2.5, 1e-5, 50.0, 100.0, float("inf")],
+            dtype=np.float64,
+        )
+        expected_output = scipy.special.gammaln(edge_values)
+        output_from_edge_lgamma_op = kmath.lgamma(edge_values)
+        self.assertAllClose(
+            output_from_edge_lgamma_op, expected_output, atol=1e-4
+        )
+
+    @parameterized.named_parameters(named_product(BACKEND_AGNOSTIC_OPS))
+    def test_lgamma_operation_basic(self, backend_agnostic_ops):
+        backend.config._set_use_backend_agnostic_ops(backend_agnostic_ops)
+        self.addCleanup(backend.config._set_use_backend_agnostic_ops, False)
+        sample_values = np.array(
+            [1.0, 2.0, 3.0, 4.0, 5.0, 0.5, 1.5, 2.5, 3.5, 10.0]
+        )
+        expected_output = scipy.special.gammaln(sample_values)
+        output_from_lgamma_op = kmath.lgamma(sample_values)
+        self.assertAllClose(output_from_lgamma_op, expected_output, atol=1e-4)
 
 
 class MathDtypeTest(testing.TestCase):
@@ -1442,16 +1434,14 @@ class MathDtypeTest(testing.TestCase):
         expected_dtype = standardize_dtype(lax.lgamma(x_jax).dtype)
 
         backend.config._set_use_backend_agnostic_ops(backend_agnostic_ops)
-        try:
-            self.assertEqual(
-                standardize_dtype(kmath.lgamma(x).dtype), expected_dtype
-            )
-            self.assertEqual(
-                standardize_dtype(kmath.Lgamma().symbolic_call(x).dtype),
-                expected_dtype,
-            )
-        finally:
-            backend.config._set_use_backend_agnostic_ops(False)
+        self.addCleanup(backend.config._set_use_backend_agnostic_ops, False)
+        self.assertEqual(
+            standardize_dtype(kmath.lgamma(x).dtype), expected_dtype
+        )
+        self.assertEqual(
+            standardize_dtype(kmath.Lgamma().symbolic_call(x).dtype),
+            expected_dtype,
+        )
 
     @parameterized.named_parameters(named_product(dtype=FLOAT_DTYPES))
     def test_logsumexp(self, dtype):
