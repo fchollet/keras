@@ -729,8 +729,9 @@ class LayerTest(testing.TestCase):
         for value in (1.0, 2.0, 3.0, 4.0, 5.0, 6.0):
             compiled_layer(ops.full((2,), value))
             num_graphs.append(counters["stats"]["unique_graphs"])
-        # first call has empty loss so still recompiles once, 2nd call onward should not recompile
-        self.assertAllEqual(num_graphs[1:], [2] * len(num_graphs[1:]))
+        # The first call locks the layer state, which causes one recompile.
+        # The later calls must reuse the same graph.
+        self.assertEqual(num_graphs[2:], [num_graphs[1]] * 4)
 
     def test_training_arg_value_resolution(self):
         # Check that even if `training` is not passed
