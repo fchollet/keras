@@ -245,7 +245,9 @@ def max(x, axis=None, keepdims=False, initial=None):
     # Only a reduction over an empty axis has no result. A zero-size tensor
     # reduced over axes that are not empty gives an empty result.
     axes = _reduced_axes(x, axis)
-    if builtins.any(x.shape[a] == 0 for a in axes):
+    if builtins.any(
+        isinstance(x.shape[a], int) and x.shape[a] == 0 for a in axes
+    ):
         if initial is None:
             raise ValueError("Cannot compute the max of an empty tensor.")
         return _full_like_reduction(x, axes, keepdims, initial)
@@ -1375,7 +1377,9 @@ def min(x, axis=None, keepdims=False, initial=None):
     # Only a reduction over an empty axis has no result. A zero-size tensor
     # reduced over axes that are not empty gives an empty result.
     axes = _reduced_axes(x, axis)
-    if builtins.any(x.shape[a] == 0 for a in axes):
+    if builtins.any(
+        isinstance(x.shape[a], int) and x.shape[a] == 0 for a in axes
+    ):
         if initial is None:
             raise ValueError("Cannot compute the min of an empty tensor.")
         return _full_like_reduction(x, axes, keepdims, initial)

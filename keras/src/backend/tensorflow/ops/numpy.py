@@ -748,15 +748,15 @@ def mean(x, axis=None, keepdims=False):
 
 
 def _smallest_reduced_dim(x, axis):
-    """Returns the size of the smallest axis that a reduction reads."""
+    """Returns the smallest reduced axis size, or 1 when no axis is reduced."""
     if axis is None:
         axes = list(range(len(x.shape)))
     else:
         axes = [
             canonicalize_axis(a, len(x.shape)) for a in to_tuple_or_list(axis)
         ]
-    # The minimum over no axes is the largest int32, so reducing over no axes
-    # or a scalar never counts as empty.
+    if not axes:
+        return tf.constant(1, "int32")
     return tf.reduce_min(tf.gather(tf.shape(x), tf.constant(axes, "int32")))
 
 
