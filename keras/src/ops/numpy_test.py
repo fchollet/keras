@@ -7990,6 +7990,7 @@ class NumpyOneInputOpsCorrectnessTest(testing.TestCase):
     @parameterized.named_parameters(
         ("x1_longer", [1, 3, 5], [7, 9]),
         ("x1_shorter", [1, 3, 5], [7, 9, 2, 4, 6]),
+        ("x1_shorter_even", [1, 3], [7, 9, 2, 4]),
     )
     def test_correlate_different_size(self, x, y):
         x = np.array(x)
