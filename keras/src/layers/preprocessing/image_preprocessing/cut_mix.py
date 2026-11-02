@@ -24,13 +24,16 @@ class CutMix(BaseImagePreprocessingLayer):
 
     Args:
         factor: A single float or a tuple of two floats between 0 and 1.
-            If a tuple of numbers is passed, a `factor` is sampled
-            between the two values.
-            If a single float is passed, a value between 0 and the passed
-            float is sampled. These values define the range from which the
-            mixing weight is sampled. A higher factor increases the variability
-            in patch sizes, leading to more diverse and larger mixed patches.
-            Defaults to 1.
+            For each batch, a concentration `alpha` is sampled uniformly
+            between the two values (between 0 and `factor` if a single float
+            is passed). Each image's mixing weight `lambda`, the fraction of
+            the image and of its label that is kept, is then sampled from
+            `Beta(alpha, alpha)`. `lambda` always ranges over (0, 1) and has
+            mean 0.5 for every `factor`. A smaller factor makes extreme patch
+            sizes (patches covering almost none or almost all of the image)
+            more likely; a larger factor concentrates the patch sizes around
+            half of the image. The CutMix paper uses `alpha = 1` (a uniform
+            mixing weight), i.e. `factor=(1.0, 1.0)`. Defaults to 1.
         seed: Integer. Used to create a random seed.
 
     Example:
