@@ -1382,6 +1382,9 @@ class Layer(BackendLayer, Operation):
                 scope.losses[:] = [
                     x for x in scope.losses if id(x) not in self._loss_ids
                 ]
+        # Use slice assignment, not `list.clear()`. With `clear()`,
+        # `torch.compile` guards on the loss tensors of the previous call
+        # and recompiles on each call.
         self._losses[:] = []
         self._loss_ids.clear()
         for layer in self._layers:
