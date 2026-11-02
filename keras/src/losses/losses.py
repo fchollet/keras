@@ -2482,6 +2482,7 @@ def categorical_focal_crossentropy(
         )
 
     if from_logits:
+        log_output = ops.log_softmax(y_pred, axis=axis)
         y_pred = ops.softmax(y_pred, axis=axis)
 
     # Adjust the predictions so that the probability of
@@ -2491,8 +2492,11 @@ def categorical_focal_crossentropy(
     output = y_pred / ops.sum(y_pred, axis=axis, keepdims=True)
     output = ops.clip(output, backend.epsilon(), 1.0 - backend.epsilon())
 
-    # Calculate cross entropy
-    cce = -y_true * ops.log(output)
+    # Calculate cross entropy (from the logits when available, so that it
+    # does not saturate at -log(epsilon) for confidently wrong predictions)
+    if not from_logits:
+        log_output = ops.log(output)
+    cce = ops.where(y_true > 0, -y_true * log_output, 0.0)
 
     # Calculate factors
     modulating_factor = ops.power(1.0 - output, gamma)
@@ -2615,6 +2619,7 @@ def sparse_categorical_focal_crossentropy(
     safe_y_true = ops.where(in_range, y_true, 0)
     safe_y_true = ops.cast(safe_y_true, "int32")
     if from_logits:
+        log_prob = ops.log_softmax(y_pred, axis=axis)
         y_pred = ops.softmax(y_pred, axis=axis)
 
     output = y_pred / ops.sum(y_pred, axis=axis, keepdims=True)
@@ -2623,6 +2628,15 @@ def sparse_categorical_focal_crossentropy(
         output, ops.expand_dims(safe_y_true, axis=axis), axis=axis
     )
     true_class_prob = ops.squeeze(true_class_prob, axis=axis)
+    if from_logits:
+        log_true_class_prob = ops.squeeze(
+            ops.take_along_axis(
+                log_prob, ops.expand_dims(safe_y_true, axis=axis), axis=axis
+            ),
+            axis=axis,
+        )
+    else:
+        log_true_class_prob = ops.log(true_class_prob)
 
     alpha = ops.convert_to_tensor(alpha, dtype=output.dtype)
     alpha_rank = len(alpha.shape)
@@ -2667,7 +2681,7 @@ def sparse_categorical_focal_crossentropy(
             alpha_t,
             ops.multiply(
                 ops.power(1.0 - true_class_prob, gamma),
-                ops.log(true_class_prob),
+                log_true_class_prob,
             ),
         )
     )
@@ -2912,13 +2926,14 @@ def binary_focal_crossentropy(
     if label_smoothing:
         y_true = y_true * (1.0 - label_smoothing) + 0.5 * label_smoothing
 
+    logits = y_pred
     if from_logits:
         y_pred = ops.sigmoid(y_pred)
 
     bce = ops.binary_crossentropy(
         target=y_true,
-        output=y_pred,
-        from_logits=False,
+        output=logits,
+        from_logits=from_logits,
     )
 
     # Calculate focal factor
