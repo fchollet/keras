@@ -13,6 +13,7 @@ from keras.src import tree
 from keras.src.backend.common import KerasVariable
 from keras.src.backend.common import global_state
 from keras.src.backend.common import standardize_dtype
+from keras.src.backend.common.backend_utils import empty_scan_ys_spec
 from keras.src.backend.common.backend_utils import slice_along_axis
 from keras.src.backend.common.backend_utils import standardize_argnums
 from keras.src.backend.common.dtypes import result_type
@@ -585,6 +586,7 @@ def cond(pred, true_fn, false_fn):
 
 
 def vectorized_map(function, elements):
+    elements = tree.map_structure(convert_to_tensor, elements)
     return torch.vmap(function)(elements)
 
 
@@ -630,6 +632,22 @@ def scan(f, init, xs=None, length=None, reverse=False, unroll=1):
     init_flat = [convert_to_tensor(init) for init in init_flat]
     init = pack_output(init_flat)
     dummy_y = [torch.zeros_like(init) for init in init_flat]
+
+    if n == 0:
+        # Nothing to stack, so trace `f` once for the shapes of `ys`.
+        packed_xs = pack_input(xs_flat) if len(xs_flat) > 0 else None
+        ys_spec = empty_scan_ys_spec(compute_output_spec, f, init, packed_xs)
+        if ys_spec is None:
+            ys_spec = dummy_y
+        stacked_y = tree.map_structure(
+            lambda y: torch.zeros(
+                (0, *y.shape),
+                dtype=to_torch_dtype(y.dtype),
+                device=get_device(),
+            ),
+            ys_spec,
+        )
+        return init, stacked_y
 
     carry = init
     ys = []

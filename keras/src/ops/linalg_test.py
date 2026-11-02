@@ -724,6 +724,11 @@ class LinalgOpsCorrectnessTest(testing.TestCase):
         out_symb = linalg.lstsq(a_symb, b_symb)
         self.assertEqual(out_symb.shape, out.shape)
 
+    def test_lstsq_zero_matrix(self):
+        a = np.zeros((3, 3), dtype="float32")
+        b = np.ones((3, 1), dtype="float32")
+        self.assertAllClose(linalg.lstsq(a, b), np.linalg.lstsq(a, b)[0])
+
     def test_matrix_rank(self):
         # Full-rank tall matrix: rank equals number of columns.
         rng = np.random.default_rng(42)
