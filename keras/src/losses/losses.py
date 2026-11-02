@@ -2496,7 +2496,7 @@ def categorical_focal_crossentropy(
     # does not saturate at -log(epsilon) for confidently wrong predictions)
     if not from_logits:
         log_output = ops.log(output)
-    cce = ops.where(y_true > 0, -y_true * log_output, 0.0)
+    cce = -y_true * ops.where(y_true > 0, log_output, 0.0)
 
     # Calculate factors
     modulating_factor = ops.power(1.0 - output, gamma)
