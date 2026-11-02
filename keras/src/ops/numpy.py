@@ -9941,7 +9941,7 @@ class Correlate(Operation):
         self.mode = mode
 
     def call(self, x1, x2):
-        return backend.ops.numpy.correlate(x1, x2, mode=self.mode)
+        return _correlate(x1, x2, mode=self.mode)
 
     def compute_output_spec(self, x1, x2):
         x1_shape = getattr(x1, "shape", [])
@@ -10008,7 +10008,55 @@ def correlate(x1, x2, mode="valid"):
     """
     if any_symbolic_tensors((x1, x2)):
         return Correlate(mode=mode).symbolic_call(x1, x2)
-    return backend.ops.numpy.correlate(x1, x2, mode=mode)
+    return _correlate(x1, x2, mode=mode)
+
+
+def _correlate(x1, x2, mode="valid"):
+    if not config._use_backend_agnostic_ops() and hasattr(
+        backend.ops.numpy, "correlate"
+    ):
+        return backend.ops.numpy.correlate(x1, x2, mode=mode)
+    x1 = backend.ops.convert_to_tensor(x1)
+    x2 = backend.ops.convert_to_tensor(x2)
+    if len(x1.shape) != 1 or len(x2.shape) != 1:
+        raise ValueError(
+            "`x1` and `x2` must be 1-dimensional tensors. "
+            f"Received: x1.shape={x1.shape}, x2.shape={x2.shape}"
+        )
+    dtype = dtypes.result_type(x1.dtype, x2.dtype)
+    if dtype == "int64":
+        dtype = "float64"
+    elif dtype not in ["bfloat16", "float16", "float64"]:
+        dtype = "float32"
+    x1 = backend.ops.cast(x1, dtype)
+    x2 = backend.ops.cast(x2, dtype)
+    # Slide the shorter input over the longer one
+    swap = x1.shape[0] < x2.shape[0]
+    if swap:
+        x1, x2 = x2, x1
+    x2_len = x2.shape[0]
+    if mode == "valid":
+        padding = (0, 0)
+    elif mode == "same":
+        padding = (x2_len // 2, (x2_len - 1) // 2)
+    elif mode == "full":
+        padding = (x2_len - 1, x2_len - 1)
+    else:
+        raise ValueError(
+            "`mode` must be either `valid`, `same`, or `full`. "
+            f"Received: mode={mode}"
+        )
+    x1 = backend.ops.numpy.pad(x1, [padding])
+    indices = backend.ops.numpy.add(
+        backend.ops.numpy.expand_dims(
+            backend.ops.numpy.arange(x1.shape[0] - x2_len + 1), axis=1
+        ),
+        backend.ops.numpy.arange(x2_len),
+    )
+    output = backend.ops.numpy.matmul(backend.ops.numpy.take(x1, indices), x2)
+    if swap:
+        output = backend.ops.numpy.flip(output, axis=0)
+    return output
 
 
 class Select(Operation):
