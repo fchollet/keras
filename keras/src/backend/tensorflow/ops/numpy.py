@@ -3952,10 +3952,14 @@ def correlate(x1, x2, mode="valid"):
         start = (full_len - out_len) // 2
         return tf.slice(full_corr, [start], [out_len])
     elif mode == "valid":
-        x1, x2 = _pack(x1, x2)
-        return tf.squeeze(
-            tf.nn.conv1d(x1, x2, stride=1, padding="VALID"), axis=[0, 2]
-        )
+        full_corr = _full_corr(x1, x2)
+        if isinstance(n, int) and isinstance(m, int):
+            start = builtins.min(n, m) - 1
+            out_len = builtins.abs(n - m) + 1
+        else:
+            start = tf.minimum(n, m) - 1
+            out_len = tf.abs(n - m) + 1
+        return tf.slice(full_corr, [start], [out_len])
     else:
         raise ValueError(
             f"Invalid mode: '{mode}'. Mode must be one of:"
