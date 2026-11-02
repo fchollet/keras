@@ -1368,7 +1368,9 @@ class SparseCategoricalCrossentropyTest(testing.TestCase):
     def test_neg_inf_non_target_logits(self):
         # Masked (-inf) non-target logits must not turn the loss into NaN.
         y_true = np.array([0, 1])
-        logits = np.array([[2.0, 1.0, -np.inf], [-np.inf, 0.5, 0.0]])
+        logits = np.array(
+            [[2.0, 1.0, -np.inf], [-np.inf, 0.5, 0.0]], dtype="float32"
+        )
         loss = losses.sparse_categorical_crossentropy(
             y_true, logits, from_logits=True
         )
