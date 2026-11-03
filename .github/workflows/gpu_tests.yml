@@ -46,8 +46,9 @@ jobs:
       fail-fast: false
       matrix:
         backend: [jax, tensorflow, torch]
+        shard: [1, 2, 3, 4]
 
-    name: Run tests on GPU
+    name: Run tests on GPU (${{ matrix.backend }}, shard ${{ matrix.shard }})
     runs-on: linux-x86-g2-32-l4-1gpu
     timeout-minutes: 240
 
@@ -93,7 +94,15 @@ jobs:
         run: python3 -c "import torch; print('Torch devices:', [torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())]); assert torch.cuda.device_count() > 0"
 
       - name: Run Tests
-        run: pytest keras --ignore keras/src/applications --cov=keras --cov-config=pyproject.toml
+        id: pytest
+        run: |
+          mkdir -p .github/test_durations/gpu
+          pytest keras --ignore keras/src/applications --cov=keras \
+            --cov-config=pyproject.toml --splits 4 \
+            --group ${{ matrix.shard }} \
+            --durations-path .github/test_durations/gpu/${{ matrix.backend }}.json \
+            --splitting-algorithm duration_based_chunks \
+            --store-durations --clean-durations
 
       - name: Convert Coverage
         run: coverage xml --omit='keras/src/applications/*,keras/api' -o core-coverage.xml
@@ -106,3 +115,19 @@ jobs:
           files: core-coverage.xml
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
+
+      # Each shard rewrites .github/test_durations/gpu/<backend>.json with its
+      # own fresh timings; master runs upload them so the committed files can be
+      # refreshed with .github/workflows/scripts/merge_test_durations.py. Upload
+      # only when pytest ran: a failed test still gives valid durations, but a
+      # failed install would upload the committed file as if it were fresh.
+      - name: Upload test durations
+        if: |
+          always() && github.event_name == 'push' &&
+          (steps.pytest.outcome == 'success' || steps.pytest.outcome == 'failure')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: durations-gpu-${{ matrix.backend }}-${{ matrix.shard }}
+          path: .github/test_durations/gpu/${{ matrix.backend }}.json
+          if-no-files-found: ignore
+          retention-days: 14
