@@ -78,7 +78,22 @@ jobs:
           apt-get -y install gnupg
 
       - name: Install Python dependencies
-        run: pip install --no-cache-dir -r requirements-${{ matrix.backend }}-cuda.txt
+        # pip retries connection errors but not a download that completes
+        # corrupt and fails its hash check, which the multi-hundred-MB CUDA
+        # wheels occasionally do. Retry the whole install a few times;
+        # --no-cache-dir makes each retry re-download.
+        run: |
+          for attempt in 1 2 3; do
+            if pip install --no-cache-dir -r requirements-${{ matrix.backend }}-cuda.txt; then
+              break
+            fi
+            if [ "$attempt" = 3 ]; then
+              echo "pip install failed after 3 attempts"
+              exit 1
+            fi
+            echo "pip install failed (attempt $attempt), retrying in 30s"
+            sleep 30
+          done
 
       - name: Verify TF Installation
         if: ${{ matrix.backend == 'tensorflow'}}
