@@ -131,6 +131,54 @@ TEST_CASES = [
     reason="Backend does not support sparse tensors.",
 )
 class OptimizerSparseTest(testing.TestCase):
+    @pytest.mark.skipif(
+        backend.backend() != "tensorflow",
+        reason="IndexedSlices are specific to TensorFlow.",
+    )
+    @parameterized.product(
+        optimizer_class=(
+            optimizers.Adam,
+            optimizers.Adagrad,
+            optimizers.RMSprop,
+        ),
+        cancel_duplicates=(False, True),
+        run_eagerly=(False, True),
+    )
+    def test_duplicate_indices_correctness(
+        self, optimizer_class, cancel_duplicates, run_eagerly
+    ):
+        import tensorflow as tf
+
+        var_sparse = backend.Variable(initializer="ones", shape=(3, 2))
+        var_dense = backend.Variable(initializer="ones", shape=(3, 2))
+        optimizer_sparse = optimizer_class(learning_rate=0.1)
+        optimizer_dense = optimizer_class(learning_rate=0.1)
+        optimizer_sparse.build([var_sparse])
+        optimizer_dense.build([var_dense])
+        duplicate = [-1.0, -2.0] if cancel_duplicates else [2.0, 1.0]
+        grad_sparse = tf.IndexedSlices(
+            values=tf.constant([[1.0, 2.0], [3.0, 4.0], duplicate]),
+            indices=tf.constant([2, 0, 2]),
+            dense_shape=tf.constant([3, 2]),
+        )
+
+        def update(gradient):
+            optimizer_sparse.apply([gradient], [var_sparse])
+            optimizer_dense.apply([tf.convert_to_tensor(gradient)], [var_dense])
+
+        if not run_eagerly:
+            update = tf.function(update)
+
+        # Cancellation can leave weights unchanged while corrupting slots.
+        # A subsequent dense update also checks the effect of saved state.
+        for gradient in (grad_sparse, tf.ones((3, 2))):
+            update(gradient)
+            self.assertAllClose(var_sparse.value, var_dense.value)
+            for sparse_state, dense_state in zip(
+                optimizer_sparse.variables, optimizer_dense.variables
+            ):
+                self.assertAllClose(sparse_state.value, dense_state.value)
+
     @parameterized.named_parameters(TEST_CASES)
     def test_sparse_gradients(
         self,

@@ -8,6 +8,7 @@ from tensorflow.python.eager import context
 
 from keras.src import backend
 from keras.src import testing
+from keras.src.optimizers.adam import Adam
 from keras.src.optimizers.sgd import SGD
 
 
@@ -39,6 +40,47 @@ class OptimizerDistributeTest(testing.TestCase):
                 weight_decay=0.004,
             )
         self.run_class_serialization_test(optimizer)
+
+    @parameterized.product(
+        cancel_duplicates=(False, True), run_eagerly=(False, True)
+    )
+    def test_sparse_indices_shared_across_replicas(
+        self, cancel_duplicates, run_eagerly
+    ):
+        with self.strategy.scope():
+            var_sparse = backend.Variable(initializer="ones", shape=(3, 1))
+            var_dense = backend.Variable(initializer="ones", shape=(3, 1))
+            optimizer_sparse = Adam(learning_rate=0.1)
+            optimizer_dense = Adam(learning_rate=0.1)
+            optimizer_sparse.build([var_sparse])
+            optimizer_dense.build([var_dense])
+
+        def replica_update():
+            replica_id = (
+                tf.distribute.get_replica_context().replica_id_in_sync_group
+            )
+            second_value = -1.0 if cancel_duplicates else 2.0
+            value = tf.where(replica_id == 0, 1.0, second_value)
+            # Local indices are unique; aggregation introduces the duplicate.
+            gradient = tf.IndexedSlices(
+                tf.reshape(value, (1, 1)),
+                tf.constant([0]),
+                tf.constant([3, 1]),
+            )
+            optimizer_sparse.apply([gradient], [var_sparse])
+            optimizer_dense.apply([tf.convert_to_tensor(gradient)], [var_dense])
+
+        def update():
+            self.strategy.run(replica_update)
+
+        if not run_eagerly:
+            update = tf.function(update)
+        update()
+        self.assertAllClose(var_sparse.value, var_dense.value)
+        for sparse_state, dense_state in zip(
+            optimizer_sparse.variables, optimizer_dense.variables
+        ):
+            self.assertAllClose(sparse_state.value, dense_state.value)
 
     @parameterized.parameters([("keras_sgd",), ("tf_keras_sgd",)])
     def test_single_step(self, optimizer_type):
