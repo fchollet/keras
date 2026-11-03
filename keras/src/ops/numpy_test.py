@@ -7987,9 +7987,20 @@ class NumpyOneInputOpsCorrectnessTest(testing.TestCase):
             knp.Correlate(mode="full")(x, y), np.correlate(x, y, mode="full")
         )
 
-    def test_correlate_different_size(self):
-        x = np.array([1, 3, 5])
-        y = np.array([7, 9])
+    def test_correlate_invalid_mode(self):
+        x = np.array([1, 2, 3])
+        y = np.array([0, 1, 0.5])
+        with self.assertRaises(ValueError):
+            knp.correlate(x, y, mode="invalid")
+
+    @parameterized.named_parameters(
+        ("x1_longer", [1, 3, 5], [7, 9]),
+        ("x1_shorter", [1, 3, 5], [7, 9, 2, 4, 6]),
+        ("x1_shorter_even", [1, 3], [7, 9, 2, 4]),
+    )
+    def test_correlate_different_size(self, x, y):
+        x = np.array(x)
+        y = np.array(y)
         self.assertAllClose(knp.correlate(x, y), np.correlate(x, y))
         self.assertAllClose(
             knp.correlate(x, y, mode="same"), np.correlate(x, y, mode="same")
