@@ -2365,6 +2365,11 @@ def corrcoef(x):
 
 
 def correlate(x1, x2, mode="valid"):
+    if mode not in ("full", "same", "valid"):
+        raise ValueError(
+            f"Invalid mode: '{mode}'. Mode must be one of:"
+            f" 'full', 'same', 'valid'."
+        )
     x1 = convert_to_tensor(x1)
     x2 = convert_to_tensor(x2)
 

@@ -7987,6 +7987,9 @@ class NumpyOneInputOpsCorrectnessTest(testing.TestCase):
             knp.Correlate(mode="full")(x, y), np.correlate(x, y, mode="full")
         )
 
+        with self.assertRaises(ValueError):
+            knp.correlate(x, y, mode="invalid")
+
     @parameterized.named_parameters(
         ("x1_longer", [1, 3, 5], [7, 9]),
         ("x1_shorter", [1, 3, 5], [7, 9, 2, 4, 6]),

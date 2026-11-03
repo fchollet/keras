@@ -3937,8 +3937,7 @@ def correlate(x1, x2, mode="valid"):
     if mode == "full":
         return _full_corr(x1, x2)
     elif mode == "same":
-        # unfortunately we can't leverage 'SAME' padding directly like
-        # we can with "valid"
+        # unfortunately we can't leverage 'SAME' padding directly
         # it works fine for odd-length filters, but for even-length filters
         # the output is off by 1 compared to numpy, due to how
         # tf handles centering
@@ -3955,14 +3954,23 @@ def correlate(x1, x2, mode="valid"):
             )
         return tf.slice(full_corr, [start], [out_len])
     elif mode == "valid":
-        full_corr = _full_corr(x1, x2)
+
+        def _valid_corr(a, b):
+            a, b = _pack(a, b)
+            out = tf.nn.conv1d(a, b, stride=1, padding="VALID")
+            return tf.squeeze(out, axis=[0, 2])
+
+        # When x1 is shorter, correlate x2 with x1 and reverse the result.
+        def _swapped_valid_corr():
+            return tf.reverse(_valid_corr(x2, x1), axis=[0])
+
         if isinstance(n, int) and isinstance(m, int):
-            start = builtins.min(n, m) - 1
-            out_len = builtins.abs(n - m) + 1
-        else:
-            start = tf.minimum(n, m) - 1
-            out_len = tf.abs(n - m) + 1
-        return tf.slice(full_corr, [start], [out_len])
+            if n < m:
+                return _swapped_valid_corr()
+            return _valid_corr(x1, x2)
+        return tf.cond(
+            tf.less(n, m), _swapped_valid_corr, lambda: _valid_corr(x1, x2)
+        )
     else:
         raise ValueError(
             f"Invalid mode: '{mode}'. Mode must be one of:"
