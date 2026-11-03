@@ -9,6 +9,7 @@ from absl.testing import parameterized
 from keras.src import backend
 from keras.src import layers
 from keras.src import models
+from keras.src import ops
 from keras.src import testing
 from keras.src import tree
 from keras.src.export import saved_model
@@ -469,6 +470,145 @@ class XLASavedModelArchiveTest(testing.TestCase):
         archive.add_endpoint("serve", lambda x: model(x), input_signature)
         with self.assertRaisesRegex(ValueError, "No variables have been"):
             archive.write_out(self._export_dir())
+
+    def test_track_deduplicates_variables(self):
+        model = get_model("sequential")
+        archive = saved_model.ExportArchive(format="xla_saved_model")
+        archive.track(model)
+        archive.track(model)  # Tracking twice must not duplicate variables.
+        archive.track(model.layers[0])
+        self.assertLen(archive.variables, len(model.variables))
+        self.assertLen(
+            archive.trainable_variables, len(model.trainable_variables)
+        )
+        self.assertLen(
+            archive.non_trainable_variables,
+            len(model.non_trainable_variables),
+        )
+        self.assertEqual(
+            archive.variables,
+            archive.trainable_variables + archive.non_trainable_variables,
+        )
+
+    def test_single_spec_and_dynamic_non_batch_dims(self):
+        # A 3D input with a dynamic sequence length: the non-batch `None` dim
+        # gets its own symbol, and the exported function accepts any length.
+        export_dir = self._export_dir()
+        model = models.Sequential([layers.Dense(4)])
+        model.build((None, None, 8))
+        archive = saved_model.ExportArchive(format="xla_saved_model")
+        archive.track(model)
+        # A single spec (not wrapped in a list) is accepted.
+        archive.add_endpoint(
+            "serve",
+            model.__call__,
+            input_signature=layers.InputSpec(
+                shape=(None, None, 8), dtype="float32"
+            ),
+            jax_export_kwargs={"platforms": ["cpu"]},
+        )
+        archive.write_out(export_dir, verbose=False)
+        apply_fn, params = load_endpoint(export_dir, "serve")
+        for seq_len in (3, 7):
+            ref_input = np.random.normal(size=(2, seq_len, 8)).astype("float32")
+            self.assertAllClose(
+                apply_fn(params, {"inputs": ref_input})["output_0"],
+                model(ref_input),
+            )
+
+    def test_polymorphic_shapes_single_string_and_concrete_dim(self):
+        export_dir = self._export_dir()
+        model = models.Sequential([layers.Dense(4)])
+        model.build((None, None, 8))
+        archive = saved_model.ExportArchive(format="xla_saved_model")
+        archive.track(model)
+        # A single polymorphic shape string (not wrapped in a list) is
+        # accepted, and can pin a `None` dimension to a concrete size.
+        archive.add_endpoint(
+            "serve",
+            model.__call__,
+            input_signature=layers.InputSpec(
+                shape=(None, None, 8), dtype="float32"
+            ),
+            polymorphic_shapes="batch, 5, 8",
+            platforms=["cpu"],
+        )
+        self.assertEqual(
+            archive._endpoints["serve"]["input_signature"]["inputs"].shape,
+            ("batch", 5, 8),
+        )
+        archive.write_out(export_dir, verbose=False)
+        apply_fn, params = load_endpoint(export_dir, "serve")
+        ref_input = np.random.normal(size=(2, 5, 8)).astype("float32")
+        self.assertAllClose(
+            apply_fn(params, {"inputs": ref_input})["output_0"],
+            model(ref_input),
+        )
+
+    def test_polymorphic_shapes_rank_mismatch_error(self):
+        model = get_model("sequential")
+        archive = saved_model.ExportArchive(format="xla_saved_model")
+        archive.track(model)
+        with self.assertRaisesRegex(ValueError, "does not match the rank"):
+            archive.add_endpoint(
+                "serve",
+                model.__call__,
+                input_signature=[
+                    layers.InputSpec(shape=(None, 10), dtype="float32")
+                ],
+                polymorphic_shapes=["batch"],
+            )
+
+    def test_backend_tensor_input_signature(self):
+        # Backend tensors / KerasTensors can be used as the input signature;
+        # their batch dimension is made dynamic.
+        export_dir = self._export_dir()
+        model = get_model("sequential")
+        archive = saved_model.ExportArchive(format="xla_saved_model")
+        archive.track(model)
+        archive.add_endpoint(
+            "serve",
+            model.__call__,
+            input_signature=[ops.ones((2, 10), dtype="float32")],
+            platforms=["cpu"],
+        )
+        self.assertEqual(
+            archive._endpoints["serve"]["input_signature"]["inputs"].shape,
+            ("batch", 10),
+        )
+        archive.write_out(export_dir, verbose=False)
+        apply_fn, params = load_endpoint(export_dir, "serve")
+        ref_input = np.random.normal(size=(4, 10)).astype("float32")
+        self.assertAllClose(
+            apply_fn(params, {"inputs": ref_input})["output_0"],
+            model(ref_input),
+        )
+
+    def test_explicit_serving_default_endpoint(self):
+        # No alias is added when `serving_default` is registered manually.
+        export_dir = self._export_dir()
+        model = get_model("sequential")
+        archive = saved_model.ExportArchive(format="xla_saved_model")
+        archive.track(model)
+        archive.add_endpoint(
+            "serving_default",
+            model.__call__,
+            input_signature=[
+                layers.InputSpec(shape=(None, 10), dtype="float32")
+            ],
+            platforms=["cpu"],
+        )
+        archive.write_out(export_dir, verbose=False)
+
+        from xla_saved_model._src import core as xsm
+
+        manifest = xsm.load(export_dir)
+        functions = [
+            name
+            for name, obj in manifest.objects.items()
+            if obj.HasField("function")
+        ]
+        self.assertEqual(functions, ["serving_default"])
 
     def test_untracked_owner_error(self):
         # Tracking a different model is not enough: the endpoint's own model
