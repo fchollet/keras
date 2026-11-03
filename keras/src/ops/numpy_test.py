@@ -6554,7 +6554,10 @@ class NumpyOneInputOpsCorrectnessTest(testing.TestCase):
         self.assertAllClose(knp.Diag(k=1)(x), np.diag(x, k=1))
         self.assertAllClose(knp.Diag(k=-1)(x), np.diag(x, k=-1))
 
-    def test_diagflat(self):
+    @parameterized.named_parameters(named_product(BACKEND_AGNOSTIC_OPS))
+    def test_diagflat(self, backend_agnostic_ops):
+        backend.config._set_use_backend_agnostic_ops(backend_agnostic_ops)
+        self.addCleanup(backend.config._set_use_backend_agnostic_ops, False)
         x = np.array([1, 2, 3])
         self.assertAllClose(knp.diagflat(x), np.diagflat(x))
         self.assertAllClose(knp.diagflat(x, k=1), np.diagflat(x, k=1))
@@ -10664,8 +10667,12 @@ class NumpyDtypeTest(testing.TestCase):
             expected_dtype,
         )
 
-    @parameterized.named_parameters(named_product(dtype=ALL_DTYPES))
-    def test_diagflat(self, dtype):
+    @parameterized.named_parameters(
+        named_product(BACKEND_AGNOSTIC_OPS, dtype=ALL_DTYPES)
+    )
+    def test_diagflat(self, backend_agnostic_ops, dtype):
+        backend.config._set_use_backend_agnostic_ops(backend_agnostic_ops)
+        self.addCleanup(backend.config._set_use_backend_agnostic_ops, False)
         import jax.numpy as jnp
 
         x = knp.ones((1,), dtype=dtype)

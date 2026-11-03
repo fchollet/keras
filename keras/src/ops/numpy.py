@@ -2699,7 +2699,7 @@ class Diagflat(Operation):
         self.k = k
 
     def call(self, x):
-        return backend.ops.numpy.diagflat(x, k=self.k)
+        return _diagflat(x, k=self.k)
 
     def compute_output_spec(self, x):
         x_shape = x.shape
@@ -2746,7 +2746,17 @@ def diagflat(x, k=0):
     """
     if any_symbolic_tensors((x,)):
         return Diagflat(k=k).symbolic_call(x)
-    return backend.ops.numpy.diagflat(x, k=k)
+    return _diagflat(x, k=k)
+
+
+def _diagflat(x, k=0):
+    if not config._use_backend_agnostic_ops() and hasattr(
+        backend.ops.numpy, "diagflat"
+    ):
+        return backend.ops.numpy.diagflat(x, k=k)
+    x = backend.ops.convert_to_tensor(x)
+    x = backend.ops.numpy.reshape(x, [-1])
+    return backend.ops.numpy.diag(x, k=k)
 
 
 class Diagonal(Operation):
