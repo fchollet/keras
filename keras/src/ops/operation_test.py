@@ -1,4 +1,5 @@
 import numpy as np
+from absl.testing import parameterized
 
 from keras.src import backend
 from keras.src import testing
@@ -58,6 +59,21 @@ class OpWithCustomConstructorNoName(operation.Operation):
 class OpWithKwargsInConstructor(operation.Operation):
     def __init__(self, alpha, beta=1.0, **kwargs):
         super().__init__(**kwargs)
+        self.alpha = alpha
+        self.beta = beta
+
+    def call(self, x):
+        return self.alpha * x + self.beta
+
+    def compute_output_spec(self, x):
+        return keras_tensor.KerasTensor(x.shape, x.dtype)
+
+
+class OpWithRenamedKwargsInConstructor(operation.Operation):
+    # Same as `OpWithKwargsInConstructor`, but the variadic keyword argument
+    # is not literally named `kwargs`.
+    def __init__(self, alpha, beta=1.0, **kw):
+        super().__init__(**kw)
         self.alpha = alpha
         self.beta = beta
 
@@ -290,20 +306,26 @@ class OperationTest(testing.TestCase):
         revived = OpWithCustomConstructorNoName.from_config(config)
         self.assertEqual(revived.get_config(), config)
 
-    def test_serialization_custom_constructor_with_kwargs_auto_config(self):
+    @parameterized.named_parameters(
+        ("kwargs", OpWithKwargsInConstructor),
+        ("renamed_kwargs", OpWithRenamedKwargsInConstructor),
+    )
+    def test_serialization_custom_constructor_with_kwargs_auto_config(
+        self, op_class
+    ):
         # Explicit name passed in constructor is serialized and deserialized.
-        op = OpWithKwargsInConstructor(alpha=0.2, name="test_op")
+        op = op_class(alpha=0.2, name="test_op")
         config = op.get_config()
         self.assertEqual(config, {"alpha": 0.2, "beta": 1.0, "name": "test_op"})
-        revived = OpWithKwargsInConstructor.from_config(config)
+        revived = op_class.from_config(config)
         self.assertEqual(revived.get_config(), config)
         self.assertEqual(revived.name, op.name)
 
         # Auto generated name is serialized and deserialized.
-        op = OpWithKwargsInConstructor(alpha=0.2, beta=0.0)
+        op = op_class(alpha=0.2, beta=0.0)
         config = op.get_config()
         self.assertEqual(config, {"alpha": 0.2, "beta": 0.0, "name": op.name})
-        revived = OpWithKwargsInConstructor.from_config(config)
+        revived = op_class.from_config(config)
         self.assertEqual(revived.get_config(), config)
         self.assertEqual(revived.name, op.name)
 
