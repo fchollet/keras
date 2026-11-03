@@ -96,6 +96,20 @@ def load_endpoint(export_dir, signature):
     return apply_fn, params
 
 
+def model_runner(export_dir):
+    """Loads an exported model with the XLA Serving Engine C++ runtime.
+
+    Returns `None` when `xla_saved_model_runner` is not installed: it is an
+    optional binary package, so the runtime round-trip tests are skipped
+    rather than failed.
+    """
+    try:
+        from xla_saved_model_runner import model_runner as runner_lib
+    except ImportError:
+        return None
+    return runner_lib.ModelRunner(model_path=export_dir)
+
+
 @pytest.mark.skipif(
     backend.backend() != "jax",
     reason="XLA SavedModel export only supports the JAX backend.",
@@ -451,3 +465,102 @@ class XLASavedModelArchiveTest(testing.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "No variables have been"):
             archive.write_out(self._export_dir())
+
+    def test_load_and_run_with_model_runner(self):
+        """Loads the artifact with the XLA Serving Engine runtime and runs it.
+
+        This exercises the actual serving path (manifest, orchestration,
+        checkpoint loading, named inputs/outputs, dynamic batch dimension)
+        rather than the Python reload used by the other tests.
+        """
+        export_dir = self._export_dir()
+        model = get_model("functional")
+        model.export(export_dir, format="xla_saved_model", platforms=["cpu"])
+
+        runner = model_runner(export_dir)
+        if runner is None:
+            self.skipTest(
+                "`xla_saved_model_runner` is not installed; skipping the "
+                "runtime round-trip."
+            )
+        self.assertEqual(runner.ifrt_platform_name(), "cpu")
+        self.assertEqual(
+            sorted(runner.signature_names()), ["serve", "serving_default"]
+        )
+
+        for batch_size in (3, 5):
+            ref_input = np.random.normal(size=(batch_size, 10)).astype(
+                "float32"
+            )
+            ref_output = np.asarray(model(ref_input))
+            for signature in ("serve", "serving_default"):
+                out = runner.signature(signature).run_with_dict_return(
+                    inputs=ref_input
+                )
+                self.assertEqual(list(out.keys()), ["output_0"])
+                self.assertEqual(out["output_0"].dtype, np.float32)
+                self.assertEqual(out["output_0"].shape, (batch_size, 1))
+                self.assertAllClose(out["output_0"], ref_output)
+
+    def test_load_and_run_multiple_endpoints_with_model_runner(self):
+        export_dir = self._export_dir()
+        x1 = layers.Input(shape=(3,), name="x1")
+        x2 = layers.Input(shape=(4,), name="x2")
+        output = layers.Dense(2)(layers.Concatenate()([x1, x2]))
+        model = models.Model(inputs={"x1": x1, "x2": x2}, outputs=output)
+        ref_inputs = {
+            "x1": np.random.normal(size=(3, 3)).astype("float32"),
+            "x2": np.random.normal(size=(3, 4)).astype("float32"),
+        }
+        ref_output = np.asarray(model(ref_inputs))
+
+        archive = saved_model.ExportArchive(format="xla_saved_model")
+        archive.track(model)
+        input_signature = [
+            {
+                "x1": layers.InputSpec(shape=(None, 3), dtype="float32"),
+                "x2": layers.InputSpec(shape=(None, 4), dtype="float32"),
+            }
+        ]
+        archive.add_endpoint(
+            "serve",
+            model.__call__,
+            input_signature=input_signature,
+            platforms=["cpu"],
+        )
+        # Dict outputs keep their keys as output names.
+        archive.add_endpoint(
+            "serve_named",
+            lambda inputs: {"logits": model(inputs)},
+            input_signature=input_signature,
+            platforms=["cpu"],
+            warmup_examples=[
+                {
+                    "x1": np.zeros((1, 3), dtype="float32"),
+                    "x2": np.zeros((1, 4), dtype="float32"),
+                }
+            ],
+        )
+        archive.write_out(export_dir, verbose=False)
+
+        runner = model_runner(export_dir)
+        if runner is None:
+            self.skipTest(
+                "`xla_saved_model_runner` is not installed; skipping the "
+                "runtime round-trip."
+            )
+        self.assertEqual(
+            sorted(runner.signature_names()),
+            ["serve", "serve_named", "serving_default"],
+        )
+        out = runner.signature("serve").run_with_dict_return(**ref_inputs)
+        self.assertEqual(list(out.keys()), ["output_0"])
+        self.assertAllClose(out["output_0"], ref_output)
+
+        out = runner.signature("serve_named").run_with_dict_return(**ref_inputs)
+        self.assertEqual(list(out.keys()), ["logits"])
+        self.assertAllClose(out["logits"], ref_output)
+
+        # `run()` returns the outputs as a list, in output order.
+        (out,) = runner.signature("serving_default").run(**ref_inputs)
+        self.assertAllClose(out, ref_output)
