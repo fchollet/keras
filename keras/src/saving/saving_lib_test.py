@@ -61,6 +61,21 @@ class MyDense(keras.layers.Layer):
         return 2
 
 
+@keras.saving.register_keras_serializable(package="my_custom_package")
+class AddWeightInInitLayer(keras.layers.Layer):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.w = self.add_weight(
+            shape=(),
+            initializer="ones",
+            trainable=True,
+            name="weight",
+        )
+
+    def call(self, inputs):
+        return inputs + self.w
+
+
 ASSETS_DATA = "These are my assets"
 VARIABLES_DATA = np.random.random((10,))
 
@@ -126,6 +141,29 @@ class CustomModelX(keras.Model):
 
     def one(self):
         return 1
+
+
+@keras.saving.register_keras_serializable(package="my_custom_package")
+class ModelWithSerializedLayer(keras.Model):
+    def __init__(self, layer, **kwargs):
+        super().__init__(**kwargs)
+        self.nested_layer = layer
+
+    def build(self, input_shape):
+        self.nested_layer.build(input_shape)
+
+    def call(self, inputs):
+        return self.nested_layer(inputs)
+
+    def get_config(self):
+        config = super().get_config()
+        config["layer"] = saving_lib.serialize_keras_object(self.nested_layer)
+        return config
+
+    @classmethod
+    def from_config(cls, config):
+        config["layer"] = saving_lib.deserialize_keras_object(config["layer"])
+        return super().from_config(config)
 
 
 @keras.saving.register_keras_serializable(package="my_custom_package")
@@ -231,6 +269,19 @@ def _get_subclassed_model_with_nested(compile=True):
     return model
 
 
+def _get_subclassed_model_with_serialized_nested(compile=True):
+    model = ModelWithSerializedLayer(
+        keras.layers.Dense(1, name="dense"), name="model_with_serialized"
+    )
+    if compile:
+        model.compile(
+            optimizer="adam",
+            loss=my_mean_squared_error,
+            metrics=[keras.metrics.Hinge(), "mse"],
+        )
+    return model
+
+
 def _get_custom_sequential_model(compile=True):
     sequential_model = keras.Sequential(
         [MyDense(1), MyDense(1)], name="sequential"
@@ -279,6 +330,20 @@ def _get_basic_functional_model(compile=True):
     inputs = keras.Input(shape=(4,), batch_size=2)
     x = keras.layers.Dense(1, name="first_dense")(inputs)
     outputs = keras.layers.Dense(1, name="second_dense")(x)
+    functional_model = keras.Model(inputs, outputs)
+    if compile:
+        functional_model.compile(
+            optimizer="adam",
+            loss=my_mean_squared_error,
+            metrics=[keras.metrics.Hinge(), "mse"],
+        )
+    return functional_model
+
+
+def _get_functional_model_with_add_weight_in_init_layer(compile=True):
+    inputs = keras.Input(shape=(4,), batch_size=2)
+    x = AddWeightInInitLayer(name="add_weight_in_init")(inputs)
+    outputs = keras.layers.Dense(1, name="dense")(x)
     functional_model = keras.Model(inputs, outputs)
     if compile:
         functional_model.compile(
@@ -375,8 +440,16 @@ class SavingTest(testing.TestCase):
         ("subclassed", _get_subclassed_model),
         ("subclassed_with_nested", _get_subclassed_model_with_nested),
         ("subclassed_with_kwargs", _get_subclassed_model_with_kwargs),
+        (
+            "subclassed_with_serialized",
+            _get_subclassed_model_with_serialized_nested,
+        ),
         ("basic_sequential", _get_basic_sequential_model),
         ("basic_functional", _get_basic_functional_model),
+        (
+            "functional_with_add_weight_in_init_layer",
+            _get_functional_model_with_add_weight_in_init_layer,
+        ),
         ("custom_sequential", _get_custom_sequential_model),
         ("custom_functional", _get_custom_functional_model),
         ("nested_functional", _get_nested_functional_model),
