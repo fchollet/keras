@@ -3937,7 +3937,8 @@ def correlate(x1, x2, mode="valid"):
     if mode == "full":
         return _full_corr(x1, x2)
     elif mode == "same":
-        # unfortunately we can't leverage 'SAME' padding directly
+        # unfortunately we can't leverage 'SAME' padding directly like
+        # we can with "valid"
         # it works fine for odd-length filters, but for even-length filters
         # the output is off by 1 compared to numpy, due to how
         # tf handles centering

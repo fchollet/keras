@@ -7987,6 +7987,9 @@ class NumpyOneInputOpsCorrectnessTest(testing.TestCase):
             knp.Correlate(mode="full")(x, y), np.correlate(x, y, mode="full")
         )
 
+    def test_correlate_invalid_mode(self):
+        x = np.array([1, 2, 3])
+        y = np.array([0, 1, 0.5])
         with self.assertRaises(ValueError):
             knp.correlate(x, y, mode="invalid")
 
