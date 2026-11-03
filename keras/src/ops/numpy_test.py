@@ -6406,6 +6406,15 @@ class NumpyOneInputOpsCorrectnessTest(testing.TestCase):
         self.assertAllClose(knp.corrcoef(x), np.corrcoef(x))
         self.assertAllClose(knp.Corrcoef()(x), np.corrcoef(x))
 
+        # A 1D input has a scalar covariance: the result is 1 for a non-zero
+        # variance and NaN for a zero variance.
+        x = np.array([1.0, 2.0, 4.0])
+        self.assertAllClose(knp.corrcoef(x), 1.0)
+        self.assertAllClose(knp.Corrcoef()(x), 1.0)
+        x = np.array([2.0, 2.0, 2.0])
+        self.assertAllClose(knp.corrcoef(x), np.nan)
+        self.assertAllClose(knp.Corrcoef()(x), np.nan)
+
         # The symbolic shape must match the eager shape for a non-square
         # input, where the number of variables differs from the number of
         # observations.
