@@ -597,6 +597,10 @@ class GetFileTest(test_case.TestCase):
         content = file_utils.listdir(self.temp_dir)
         self.assertIn("sample_file.txt", content)
 
+    def test_walk(self):
+        entries = list(file_utils.walk(self.temp_dir))
+        self.assertEqual(entries, [(self.temp_dir, [], ["sample_file.txt"])])
+
     def test_makedirs_and_rmtree(self):
         new_dir = os.path.join(self.temp_dir, "new_directory")
         file_utils.makedirs(new_dir)
@@ -807,6 +811,8 @@ class RemotePathTest(test_case.TestCase):
         ):
             subdir = file_utils.join(root, "a", "b")
             self.assertEqual(subdir, os.path.join(root, "a", "b"))
+            self.assertEqual(file_utils.join(subdir, ""), subdir + "/")
+            self.assertEqual(file_utils.join(subdir + "/"), subdir + "/")
             file_utils.makedirs(subdir)
             file_utils.makedirs(subdir)  # Tolerates an existing directory.
             self.assertTrue(file_utils.isdir(subdir))
@@ -823,8 +829,19 @@ class RemotePathTest(test_case.TestCase):
             self.assertEqual(
                 sorted(file_utils.listdir(subdir)), ["dst.txt", "src.txt"]
             )
+            parent = file_utils.join(root, "a")
+            self.assertEqual(
+                [
+                    (dirpath, dirs, sorted(files))
+                    for dirpath, dirs, files in file_utils.walk(parent)
+                ],
+                [
+                    (parent, ["b"], []),
+                    (subdir, [], ["dst.txt", "src.txt"]),
+                ],
+            )
 
             file_utils.remove(dst)
             self.assertFalse(file_utils.exists(dst))
-            file_utils.rmtree(file_utils.join(root, "a"))
+            file_utils.rmtree(parent)
             self.assertFalse(file_utils.exists(subdir))

@@ -338,7 +338,7 @@ def load_model(filepath, custom_objects=None, compile=True, safe_mode=True):
                 "Invalid filename: expected a `.keras` extension. "
                 f"Received: filepath={filepath}"
             )
-        with open(filepath, "rb") as f:
+        with file_utils.File(filepath, "rb") as f:
             return _load_model_from_fileobj(
                 f, custom_objects, compile, safe_mode
             )

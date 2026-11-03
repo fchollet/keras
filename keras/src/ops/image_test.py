@@ -2515,6 +2515,20 @@ class ImageOpsCorrectnessTest(testing.TestCase):
         self.assertEqual(tuple(out.shape), tuple(ref_out.shape))
         self.assertAllClose(out, ref_out, atol=1e-2, rtol=1e-2)
 
+        # Test batch with one set of points
+        backend.set_image_data_format("channels_last")
+        x = np.random.uniform(size=(2, 20, 20, 3)).astype("float32")
+        start_points = np.random.uniform(size=(4, 2)).astype("float32")
+        end_points = np.random.uniform(size=(4, 2)).astype("float32")
+
+        out = kimage.perspective_transform(
+            x, start_points, end_points, interpolation=interpolation
+        )
+        ref_out = _perspective_transform_numpy(
+            x, start_points, end_points, interpolation=interpolation
+        )
+        self.assertAllClose(out, ref_out, atol=1e-2, rtol=1e-2)
+
     def test_perspective_transform_bfloat16_no_crash(self):
         images = np.ones((10, 10, 3), dtype="bfloat16")
         start_points = np.array(
@@ -2806,6 +2820,18 @@ class ImageOpsCorrectnessTest(testing.TestCase):
             np.mean(out), np.mean(ref_out), atol=1e-2, rtol=1e-2
         )
         self.assertAllClose(np.var(out), np.var(ref_out), atol=1e-2, rtol=1e-2)
+
+    def test_map_coordinates_mirror_size_one_axis(self):
+        if backend.backend() == "tensorflow":
+            self.skipTest("tensorflow `mirror` fails on a size 1 axis")
+        input = np.array([[5.0]], dtype="float32")
+        coordinates = [
+            np.array([-1.5, 0.3, 2.0], dtype="float32"),
+            np.array([0.7, -2.2, 1.5], dtype="float32"),
+        ]
+        output = kimage.map_coordinates(input, coordinates, 1, "mirror")
+        expected = _fixed_map_coordinates(input, coordinates, 1, "mirror")
+        self.assertAllClose(output, expected)
 
     def test_map_coordinates_constant_padding(self):
         input_img = tf.ones((2, 2), dtype=tf.uint8)

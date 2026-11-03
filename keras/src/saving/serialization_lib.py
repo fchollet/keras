@@ -758,7 +758,35 @@ def deserialize_keras_object(
     safe_mode_scope = SafeModeScope(safe_mode)
     with custom_obj_scope, safe_mode_scope:
         try:
-            instance = cls.from_config(inner_config)
+            from keras.src.layers.layer import Layer
+            from keras.src.models.functional import Functional
+
+            if (
+                inspect.isclass(cls)
+                and issubclass(cls, Layer)
+                # Note: Functional models are excluded because their layers
+                # are built right when connecting the nodes and before the
+                # model is even created. So the name of the model is not part
+                # of the name stack when the path is captured.
+                and not issubclass(cls, Functional)
+                and inner_config.get("name")
+            ):
+                # The `build` method wrapper is where the `path` of layers is
+                # captured, which is then used for variable paths.
+                # When a model is constructed from code and `build` is called,
+                # layers and models are built in order from outermost to
+                # innermost, which creates a stack of name scopes for the path.
+                # However, when reconstructing from config, layers and models
+                # are built from innermost to outermost. This is because the
+                # build config was captured and `build_from_config` is called
+                # right below.
+                # In order to recreate the correct name stack, we need a name
+                # scope wrapping `from_config`, which is where nested layers
+                # are constructed and built.
+                with backend.name_scope(inner_config.get("name")):
+                    instance = cls.from_config(inner_config)
+            else:
+                instance = cls.from_config(inner_config)
         except TypeError as e:
             raise TypeError(
                 f"{cls} could not be deserialized properly. Please"

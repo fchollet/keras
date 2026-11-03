@@ -1919,6 +1919,9 @@ def searchsorted(sorted_sequence, values, side="left"):
 
 def sign(x):
     x = convert_to_tensor(x)
+    # `torch.sign` maps nan to 0, numpy keeps it.
+    if x.is_floating_point():
+        return torch.where(torch.isnan(x), x, torch.sign(x))
     return torch.sign(x)
 
 
@@ -2365,6 +2368,11 @@ def corrcoef(x):
 
 
 def correlate(x1, x2, mode="valid"):
+    if mode not in ("full", "same", "valid"):
+        raise ValueError(
+            f"Invalid mode: '{mode}'. Mode must be one of:"
+            f" 'full', 'same', 'valid'."
+        )
     x1 = convert_to_tensor(x1)
     x2 = convert_to_tensor(x2)
 
@@ -2405,8 +2413,9 @@ def correlate(x1, x2, mode="valid"):
         result = result[..., start_idx : start_idx + target_length]
 
     if mode == "same":
-        start_idx = (result.size(-1) - x1_len) // 2
-        result = result[..., start_idx : start_idx + x1_len]
+        target_length = builtins.max(x1_len, x2_len)
+        start_idx = (result.size(-1) - target_length + (x1_len < x2_len)) // 2
+        result = result[..., start_idx : start_idx + target_length]
 
     return torch.squeeze(result, dim=0)
 

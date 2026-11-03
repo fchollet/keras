@@ -1,12 +1,15 @@
 import os
+from unittest import mock
 
 import numpy as np
 from absl.testing import parameterized
 
 from keras.src import backend
 from keras.src import testing
+from keras.src.utils import file_utils
 from keras.src.utils import image_dataset_utils
 from keras.src.utils import image_utils
+from keras.src.utils.module_utils import LazyModule
 from keras.src.utils.module_utils import tensorflow as tf
 
 
@@ -744,3 +747,35 @@ class ImageDatasetFromDirectoryTest(testing.TestCase):
 
         self.assertAllClose(train_batches_1, train_batches_1_alt, atol=1e-6)
         self.assertAllClose(val_batches_1, val_batches_1_alt, atol=1e-6)
+
+    def test_image_dataset_from_directory_remote(self):
+        directory = self._prepare_directory(
+            num_classes=2, count=8, nested_dirs=True
+        )
+        with (
+            mock.patch.object(file_utils, "is_remote_path", lambda path: True),
+            mock.patch.object(
+                file_utils, "gfile", LazyModule("keras_test_unavailable_module")
+            ),
+        ):
+            dataset = image_dataset_utils.image_dataset_from_directory(
+                directory,
+                batch_size=8,
+                image_size=(18, 18),
+                follow_links=True,
+                format="grain",
+            )
+            images, labels = next(iter(dataset))
+            self.assertEqual(images.shape[0], 8)
+            self.assertEqual(list(labels.shape), [8])
+
+            dataset = image_dataset_utils.image_dataset_from_directory(
+                directory,
+                batch_size=8,
+                image_size=(18, 18),
+                labels=None,
+                follow_links=True,
+                format="grain",
+            )
+            images = next(iter(dataset))
+            self.assertEqual(images.shape[0], 8)

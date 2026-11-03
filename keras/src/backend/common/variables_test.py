@@ -13,6 +13,7 @@ from keras.src.backend.common import standardize_dtype
 from keras.src.backend.common import standardize_shape
 from keras.src.backend.common.variables import AutocastScope
 from keras.src.backend.common.variables import shape_equal
+from keras.src.distribution.distribution_lib import TensorLayout
 from keras.src.testing import test_case
 from keras.src.testing.test_utils import named_product
 
@@ -139,6 +140,14 @@ class VariableInitializationTest(test_case.TestCase):
             ValueError, "When creating a Variable from an initializer"
         ):
             backend.Variable(initializer=lambda: np.ones((2, 2)))
+
+    def test_variable_with_layout_with_no_device_mesh(self):
+        """Test that Variable raises error if layout has no mesh."""
+        layout = TensorLayout(axes=(None, "model"), device_mesh=None)
+        with self.assertRaisesRegex(
+            ValueError, "Argument `layout` must have `device_mesh` set."
+        ):
+            backend.Variable(initializer=np.ones((2, 2)), layout=layout)
 
 
 class VariablePropertiesTest(test_case.TestCase):

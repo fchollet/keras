@@ -566,7 +566,12 @@ def join(path, *paths):
     if _is_remote_path_or_raise(path):
         if gfile.available:
             return gfile.join(path, *paths)
-        return str(epath.Path(path).joinpath(*paths))
+        res = str(epath.Path(path).joinpath(*paths))
+        # Match `gfile.join`, which preserves a trailing slash.
+        last = paths[-1] if paths else path
+        if (last == "" or str(last).endswith("/")) and not res.endswith("/"):
+            return res + "/"
+        return res
     return os.path.join(path, *paths)
 
 
@@ -602,6 +607,24 @@ def listdir(path):
     return os.listdir(path)
 
 
+def _epath_walk(top, topdown=True, onerror=None):
+    # Match `gfile.walk`, which yields `root` as a `str` rather than a `Path`.
+    for root, dirs, files in epath.Path(top).walk(
+        top_down=topdown, on_error=onerror
+    ):
+        yield str(root), dirs, files
+
+
+def walk(top, topdown=True, onerror=None, followlinks=False):
+    if _is_remote_path_or_raise(top):
+        if gfile.available:
+            return gfile.walk(top, topdown=topdown, onerror=onerror)
+        return _epath_walk(top, topdown=topdown, onerror=onerror)
+    return os.walk(
+        top, topdown=topdown, onerror=onerror, followlinks=followlinks
+    )
+
+
 def copy(src, dst):
     if _is_remote_path_or_raise(src) or _is_remote_path_or_raise(dst):
         if gfile.available:
@@ -617,3 +640,12 @@ def makedirs(path):
         # Match `gfile.makedirs`, which does not fail if `path` exists.
         return epath.Path(path).mkdir(parents=True, exist_ok=True)
     return os.makedirs(path)
+
+
+def getmtime(path):
+    """Returns the last modification time of `path`, in seconds since epoch."""
+    if _is_remote_path_or_raise(path):
+        if gfile.available:
+            return gfile.stat(path).mtime_nsec / 1e9
+        return epath.Path(path).stat().mtime
+    return os.path.getmtime(path)
