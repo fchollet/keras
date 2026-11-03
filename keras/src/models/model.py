@@ -820,8 +820,9 @@ class Model(Trainer, Layer):
             filepath: `str` or `pathlib.Path` object. The path to save the
                 artifact.
             format: `str`. The export format. Supported values:
-                `"tf_saved_model"`, `"onnx"`, `"openvino"`, `"litert"`,
-                and `"torch"`. Defaults to `"tf_saved_model"`.
+                `"tf_saved_model"`, `"xla_saved_model"`, `"onnx"`,
+                `"openvino"`, `"litert"`, and `"torch"`. Defaults to
+                `"tf_saved_model"`.
             verbose: `bool`. Whether to print a message during export. Defaults
                 to `None`, which uses the default value set by different
                 backends and formats.
@@ -848,6 +849,12 @@ class Model(Trainer, Layer):
                         https://github.com/google/jax/blob/main/jax/experimental/jax2tf/README.md).
                     If `native_serialization` and `polymorphic_shapes` are not
                     provided, they will be automatically computed.
+                - XLA SavedModel options: Optional keyword arguments specific
+                    to `format="xla_saved_model"` (JAX backend only), forwarded
+                    to `ExportArchive.add_endpoint()`: `platforms` (e.g.
+                    `["cpu", "cuda", "tpu"]`), `jax_export_kwargs`,
+                    `polymorphic_shapes`, `polymorphic_constraints`,
+                    `batch_options` and `warmup_examples`.
                 - `opset_version`: Optional `int`. Specific to `format="onnx"`.
                     An integer value that specifies the ONNX opset version.
                 - LiteRT-specific options: Optional keyword arguments specific
@@ -896,6 +903,23 @@ class Model(Trainer, Layer):
         # Load the artifact in a different process/environment
         reloaded_artifact = tf.saved_model.load("path/to/location")
         predictions = reloaded_artifact.serve(input_data)
+        ```
+
+        Here's how to export an XLA SavedModel for the XLA Serving Engine
+        (JAX backend only).
+
+        ```python
+        # Export the model as an XLA SavedModel artifact
+        model.export(
+            "path/to/location", format="xla_saved_model", platforms=["cpu"]
+        )
+
+        # Serve it with the XLA Serving Engine, or run it in-process:
+        from xla_saved_model_runner import model_runner
+        runner = model_runner.ModelRunner(
+            model_path="path/to/location", platform="cpu"
+        )
+        predictions = runner.signature("serve").run(input_data)
         ```
 
         Here's how to export an ONNX for inference.
@@ -947,9 +971,11 @@ class Model(Trainer, Layer):
         from keras.src.export import export_openvino
         from keras.src.export import export_saved_model
         from keras.src.export import export_torch
+        from keras.src.export import export_xla_saved_model
 
         available_formats = (
             "tf_saved_model",
+            "xla_saved_model",
             "onnx",
             "openvino",
             "litert",
@@ -975,8 +1001,20 @@ class Model(Trainer, Layer):
         if format == "torch" and backend.backend() != "torch":
             raise ValueError("Torch export requires PyTorch backend.")
 
+        # Check if XLA SavedModel export is available (requires JAX backend)
+        if format == "xla_saved_model" and backend.backend() != "jax":
+            raise ValueError("XLA SavedModel export requires JAX backend.")
+
         if format == "tf_saved_model":
             export_saved_model(
+                self,
+                filepath,
+                verbose,
+                input_signature=input_signature,
+                **kwargs,
+            )
+        elif format == "xla_saved_model":
+            export_xla_saved_model(
                 self,
                 filepath,
                 verbose,
