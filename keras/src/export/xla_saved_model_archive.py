@@ -210,6 +210,13 @@ class XLASavedModelArchive:
         # Build the structure of positional arguments (as `InputSpec`s) and
         # the flat, named structure that the serving layer will see.
         spec_structure = tree.map_structure(_make_input_spec, input_signature)
+        for spec in tree.flatten(spec_structure):
+            if spec.shape is None:
+                raise ValueError(
+                    "XLA SavedModel export requires inputs with a known rank "
+                    "(static number of dimensions); individual dimensions may "
+                    f"be `None`. Received input spec: {spec}"
+                )
         names, is_single_dict = _get_input_names(spec_structure)
         polymorphic_shapes = kwargs.pop("polymorphic_shapes", None)
         if polymorphic_shapes is None:
@@ -277,6 +284,9 @@ class XLASavedModelArchive:
             "batch_options": kwargs.pop("batch_options", None),
             "warmup_examples": kwargs.pop("warmup_examples", None),
             "positional_signature": spec_structure,
+            # Layer/model `fn` is a bound method of, if any (see
+            # `_check_endpoint_owners_are_tracked`).
+            "owner": getattr(fn, "__self__", None),
         }
         self._endpoint_names.append(name)
 
@@ -450,15 +460,47 @@ class XLASavedModelArchive:
         """Returns the flat list of variable values, matching `self.variables`.
 
         Unlike the TF SavedModel archive, variables are not inferred from the
-        traced functions: an endpoint touching an untracked variable fails at
-        export time with a Keras error, so they must be tracked explicitly.
+        traced functions, so they must be tracked explicitly: under
+        `StatelessScope`, an untracked variable silently resolves to its
+        concrete value and would be baked into the StableHLO as a constant.
         """
+        self._check_endpoint_owners_are_tracked()
         if not self.variables:
+            # `xla_saved_model` requires a weights checkpoint: `params=None`
+            # produces an artifact the XLA Serving Engine refuses to load
+            # ("Object key for weight names ... not found in manifest") and
+            # an empty pytree cannot be saved by Orbax ("Found empty item").
             raise ValueError(
                 "No variables have been tracked. Call `track(model)` (or "
-                "`track_and_add_endpoint()`) before `write_out()`."
+                "`track_and_add_endpoint()`) before `write_out()`. The XLA "
+                "SavedModel format requires a weights checkpoint, so purely "
+                "stateless endpoints cannot be exported on their own."
             )
         return [v.value for v in self.variables]
+
+    def _check_endpoint_owners_are_tracked(self):
+        """Raises if an endpoint is a method of a layer that is not tracked.
+
+        This catches the common mistake of registering `model.call` /
+        `model.__call__` without `track(model)`. Variables used by other
+        callables cannot be detected and would be embedded as constants.
+        """
+        tracked_ids = set(id(v) for v in self.variables)
+        for name, endpoint in self._endpoints.items():
+            owner = endpoint["owner"]
+            if not isinstance(owner, layers.Layer):
+                continue
+            untracked = [
+                v.path for v in owner.variables if id(v) not in tracked_ids
+            ]
+            if untracked:
+                raise ValueError(
+                    f"Endpoint '{name}' is a method of {owner.name!r}, but "
+                    "the following variables of that layer/model have not "
+                    f"been tracked: {untracked}. Call `track({owner.name})` "
+                    "before `write_out()` so that the variables are exported "
+                    "to the checkpoint instead of being embedded as constants."
+                )
 
     def _write_variable_collections(self, filepath):
         """Saves the variable collections to a dedicated Orbax checkpoint.
@@ -491,7 +533,12 @@ def _make_input_spec(x):
     if hasattr(x, "shape") and hasattr(x, "dtype") and hasattr(x, "name"):
         # Covers `tf.TensorSpec` without importing TensorFlow.
         if type(x).__name__ == "TensorSpec":
-            shape = tuple(x.shape.as_list()) if x.shape.rank else ()
+            if x.shape.rank is None:
+                # Unknown rank: rejected with a clear error in
+                # `add_endpoint()`, since symbolic shapes need a rank.
+                shape = None
+            else:
+                shape = tuple(x.shape.as_list())
             return layers.InputSpec(
                 shape=shape, dtype=x.dtype.name, name=x.name
             )

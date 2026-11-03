@@ -455,7 +455,29 @@ class XLASavedModelArchiveTest(testing.TestCase):
 
     def test_untracked_variables_error(self):
         model = get_model("sequential")
+        input_signature = [layers.InputSpec(shape=(None, 10), dtype="float32")]
+
+        # A bound method of an untracked model is detected explicitly.
         archive = saved_model.ExportArchive(format="xla_saved_model")
+        archive.add_endpoint("serve", model.__call__, input_signature)
+        with self.assertRaisesRegex(ValueError, "have not been tracked"):
+            archive.write_out(self._export_dir())
+
+        # Otherwise, exporting without any tracked variables is rejected: the
+        # format requires a weights checkpoint.
+        archive = saved_model.ExportArchive(format="xla_saved_model")
+        archive.add_endpoint("serve", lambda x: model(x), input_signature)
+        with self.assertRaisesRegex(ValueError, "No variables have been"):
+            archive.write_out(self._export_dir())
+
+    def test_untracked_owner_error(self):
+        # Tracking a different model is not enough: the endpoint's own model
+        # must be tracked, otherwise its weights would be baked in as
+        # constants.
+        model = get_model("sequential")
+        other = get_model("sequential")
+        archive = saved_model.ExportArchive(format="xla_saved_model")
+        archive.track(other)
         archive.add_endpoint(
             "serve",
             model.__call__,
@@ -463,8 +485,30 @@ class XLASavedModelArchiveTest(testing.TestCase):
                 layers.InputSpec(shape=(None, 10), dtype="float32")
             ],
         )
-        with self.assertRaisesRegex(ValueError, "No variables have been"):
+        with self.assertRaisesRegex(ValueError, "have not been tracked"):
             archive.write_out(self._export_dir())
+
+    def test_unknown_rank_error(self):
+        tf = pytest.importorskip("tensorflow")
+
+        model = get_model("sequential")
+        archive = saved_model.ExportArchive(format="xla_saved_model")
+        archive.track(model)
+        with self.assertRaisesRegex(ValueError, "known rank"):
+            archive.add_endpoint(
+                "serve",
+                model.__call__,
+                input_signature=[tf.TensorSpec(shape=None, dtype="float32")],
+            )
+        # Scalar and partially-known `tf.TensorSpec`s are accepted.
+        archive.add_endpoint(
+            "serve",
+            lambda x, s: model(x) * s,
+            input_signature=[
+                tf.TensorSpec(shape=(None, 10), dtype="float32"),
+                tf.TensorSpec(shape=(), dtype="float32"),
+            ],
+        )
 
     def test_load_and_run_with_model_runner(self):
         """Loads the artifact with the XLA Serving Engine runtime and runs it.
