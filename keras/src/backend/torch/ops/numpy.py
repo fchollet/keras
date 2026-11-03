@@ -1919,6 +1919,9 @@ def searchsorted(sorted_sequence, values, side="left"):
 
 def sign(x):
     x = convert_to_tensor(x)
+    # `torch.sign` maps nan to 0, numpy keeps it.
+    if x.is_floating_point():
+        return torch.where(torch.isnan(x), x, torch.sign(x))
     return torch.sign(x)
 
 

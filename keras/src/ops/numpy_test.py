@@ -7426,6 +7426,9 @@ class NumpyOneInputOpsCorrectnessTest(testing.TestCase):
         self.assertAllClose(knp.sign(x), np.sign(x))
         self.assertAllClose(knp.Sign()(x), np.sign(x))
 
+        x = np.array([np.nan, -2.0, 0.0, 3.0], dtype="float32")
+        self.assertAllClose(knp.sign(x), np.sign(x))
+
     def test_signbit(self):
         x = np.array([[0.0, -0.0, -1.1e-45], [1.1e-38, 2, -1]])
         self.assertAllClose(knp.signbit(x), np.signbit(x))

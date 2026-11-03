@@ -565,11 +565,13 @@ def perspective_transform(
     if data_format == "channels_first":
         images = jnp.transpose(images, (0, 2, 3, 1))
 
-    _, height, width, _ = images.shape
+    batch_size, height, width, _ = images.shape
     transforms = compute_homography_matrix(
         jnp.asarray(start_points, dtype="float32"),
         jnp.asarray(end_points, dtype="float32"),
     )
+    if transforms.shape[0] == 1 and batch_size > 1:
+        transforms = jnp.repeat(transforms, batch_size, axis=0)
 
     x, y = jnp.meshgrid(jnp.arange(width), jnp.arange(height), indexing="xy")
     grid = jnp.stack([x.ravel(), y.ravel(), jnp.ones_like(x).ravel()], axis=0)
