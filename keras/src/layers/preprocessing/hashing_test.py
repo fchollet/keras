@@ -295,6 +295,22 @@ class HashingTest(testing.TestCase):
         predictions = model.predict(np.array([[1, 2, 3], [4, 5, 6]]), verbose=0)
         self.assertEqual(predictions.shape, (2, 1))
 
+    def test_one_hot_output_preserves_singleton_axes(self):
+        layer = layers.Hashing(num_bins=5, output_mode="one_hot")
+        encoded = layer(np.zeros((2, 1, 1), dtype="int64"))
+        self.assertEqual(encoded.shape, (2, 1, 5))
+
+        scalar_encoded = layer(np.array(0, dtype="int64"))
+        self.assertEqual(scalar_encoded.shape, (1, 5))
+
+    def test_compute_output_spec_preserves_sparse(self):
+        layer = layers.Hashing(
+            num_bins=5, output_mode="one_hot", sparse=True
+        )
+        spec = layer.compute_output_spec(layers.Input(shape=(3,)))
+        self.assertTrue(spec.sparse)
+        self.assertEqual(spec.shape, (None, 3, 5))
+
     def test_multi_hot_output(self):
         input_array = np.array([[0, 1, 2, 3, 4]])
 

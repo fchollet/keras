@@ -212,14 +212,15 @@ class Hashing(Layer):
     def compute_output_shape(self, input_shape):
         if self.output_mode == "int":
             return tuple(input_shape)
+        # `one_hot` adds a `num_bins` axis, unless the last axis is statically
+        # 1, in which case it replaces that axis. `multi_hot` and `count`
+        # encode the last (sample) axis into a `num_bins`-sized axis.
         if (
             self.output_mode == "one_hot"
             and input_shape
             and (not isinstance(input_shape[-1], int) or input_shape[-1] != 1)
         ):
             return tuple(input_shape) + (self.num_bins,)
-        # `one_hot`, `multi_hot` and `count` encode the last (sample) axis
-        # into a `num_bins`-sized axis.
         if len(input_shape) == 0:
             return (self.num_bins,)
         return tuple(input_shape[:-1]) + (self.num_bins,)
@@ -229,8 +230,6 @@ class Hashing(Layer):
 
         with tf.device("CPU:0"):
             inputs = tf_utils.ensure_tensor(inputs)
-            if self.output_mode == "one_hot" and inputs.shape[-1] == 1:
-                inputs = tf_backend.ops.numpy.squeeze(inputs, axis=-1)
             if isinstance(inputs, tf.SparseTensor):
                 indices = tf.SparseTensor(
                     indices=inputs.indices,
@@ -281,10 +280,10 @@ class Hashing(Layer):
         return values
 
     def compute_output_spec(self, inputs):
-        if self.output_mode == "int":
-            return backend.KerasTensor(shape=inputs.shape, dtype=self.dtype)
         return backend.KerasTensor(
-            shape=self.compute_output_shape(inputs.shape), dtype=self.dtype
+            shape=self.compute_output_shape(inputs.shape),
+            dtype=self.dtype,
+            sparse=self.sparse,
         )
 
     def get_config(self):
