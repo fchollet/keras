@@ -9182,7 +9182,7 @@ def divide(x1, x2):
 
 class DivideNoNan(Operation):
     def call(self, x1, x2):
-        return backend.ops.numpy.divide_no_nan(x1, x2)
+        return _divide_no_nan(x1, x2)
 
     def compute_output_spec(self, x1, x2):
         x1_shape = getattr(x1, "shape", [])
@@ -9214,7 +9214,24 @@ def divide_no_nan(x1, x2):
     """
     if any_symbolic_tensors((x1, x2)):
         return DivideNoNan().symbolic_call(x1, x2)
-    return backend.ops.numpy.divide_no_nan(x1, x2)
+    return _divide_no_nan(x1, x2)
+
+
+def _divide_no_nan(x1, x2):
+    if not config._use_backend_agnostic_ops() and hasattr(
+        backend.ops.numpy, "divide_no_nan"
+    ):
+        return backend.ops.numpy.divide_no_nan(x1, x2)
+    x1 = backend.ops.convert_to_tensor(x1)
+    x2 = backend.ops.convert_to_tensor(x2)
+    dtype = dtypes.result_type(x1.dtype, x2.dtype, float)
+    x1 = backend.ops.cast(x1, dtype)
+    x2 = backend.ops.cast(x2, dtype)
+    x2_is_zero = backend.ops.numpy.equal(x2, 0)
+    safe_x2 = backend.ops.numpy.where(x2_is_zero, 1, x2)
+    return backend.ops.numpy.where(
+        x2_is_zero, 0, backend.ops.numpy.divide(x1, safe_x2)
+    )
 
 
 class TrueDivide(Operation):
