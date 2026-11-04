@@ -9222,9 +9222,15 @@ def _divide_no_nan(x1, x2):
         backend.ops.numpy, "divide_no_nan"
     ):
         return backend.ops.numpy.divide_no_nan(x1, x2)
-    x1 = backend.ops.convert_to_tensor(x1)
-    x2 = backend.ops.convert_to_tensor(x2)
-    dtype = dtypes.result_type(x1.dtype, x2.dtype, float)
+    if not isinstance(x1, (int, float)):
+        x1 = backend.ops.convert_to_tensor(x1)
+    if not isinstance(x2, (int, float)):
+        x2 = backend.ops.convert_to_tensor(x2)
+    dtype = dtypes.result_type(
+        getattr(x1, "dtype", type(x1)),
+        getattr(x2, "dtype", type(x2)),
+        float,
+    )
     x1 = backend.ops.cast(x1, dtype)
     x2 = backend.ops.cast(x2, dtype)
     x2_is_zero = backend.ops.numpy.equal(x2, 0)
