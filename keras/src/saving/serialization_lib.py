@@ -803,7 +803,6 @@ def deserialize_keras_object(
         compile_config = config.get("compile_config", None)
         if compile_config:
             instance.compile_from_config(compile_config)
-            instance.compiled = True
 
     if "shared_object_id" in config:
         record_object_after_deserialization(
