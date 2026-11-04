@@ -20,7 +20,7 @@ def standardize_tuple(value, n, name, allow_zero=False):
         f"Received {name}={value}"
     )
 
-    if isinstance(value, (int, np.integer)):
+    if isinstance(value, (int, np.integer)) and not isinstance(value, bool):
         value_tuple = (int(value),) * n
     else:
         try:
