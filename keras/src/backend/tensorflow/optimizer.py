@@ -12,6 +12,7 @@ import warnings
 import tensorflow as tf
 
 from keras.src import backend
+from keras.src import ops
 from keras.src.backend.tensorflow.trackable import KerasAutoTrackable
 from keras.src.optimizers import base_optimizer
 
@@ -141,6 +142,71 @@ class TFOptimizer(KerasAutoTrackable, base_optimizer.BaseOptimizer):
             self._distribution_strategy,
             grads_and_vars,
             learning_rate,
+        )
+
+    def _backend_apply_gradients(self, grads, trainable_variables):
+        if (
+            not self.gradient_accumulation_steps
+            or tf.distribute.in_cross_replica_context()
+            or tf.__internal__.distribute.strategy_supports_no_merge_call()
+        ):
+            return super()._backend_apply_gradients(grads, trainable_variables)
+
+        replica_context = tf.distribute.get_replica_context()
+        if replica_context is None:
+            return super()._backend_apply_gradients(grads, trainable_variables)
+
+        def _distributed_apply_gradient_accumulation(
+            distribution, grads, trainable_variables
+        ):
+            def _replica_is_update_step():
+                return (
+                    self._iterations + 1
+                ) % self.gradient_accumulation_steps == 0
+
+            is_update_step_per_replica = (
+                distribution.extended.call_for_each_replica(
+                    _replica_is_update_step
+                )
+            )
+            is_update_step = distribution.experimental_local_results(
+                is_update_step_per_replica
+            )[0]
+
+            def update_fn():
+                def _replica_update(grads, trainable_variables):
+                    acc_grads = self._get_accumulated_gradients(
+                        trainable_variables
+                    )
+                    self._backend_apply_accumulated_gradients(
+                        grads, trainable_variables, acc_grads
+                    )
+
+                return distribution.extended.call_for_each_replica(
+                    _replica_update, args=(grads, trainable_variables)
+                )
+
+            def increment_fn():
+                def _replica_increment(grads, trainable_variables):
+                    acc_grads = self._get_accumulated_gradients(
+                        trainable_variables
+                    )
+                    self._backend_increment_gradient_accumulators(
+                        grads, acc_grads
+                    )
+
+                return distribution.extended.call_for_each_replica(
+                    _replica_increment, args=(grads, trainable_variables)
+                )
+
+            # The branch bodies may call `merge_call` via all-reduce/update
+            # hooks, so the conditional itself must live in cross-replica
+            # context.
+            return ops.cond(is_update_step, update_fn, increment_fn)
+
+        return replica_context.merge_call(
+            _distributed_apply_gradient_accumulation,
+            args=(grads, trainable_variables),
         )
 
     def _distributed_tf_update_step(

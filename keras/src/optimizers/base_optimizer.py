@@ -563,30 +563,13 @@ class BaseOptimizer(KerasSaveable):
             # `trainable_variables` might have been filtered in previous
             # processing steps, so we need to ensure the correct mapping between
             # `self._accumulated_gradients` and `trainable_variables`
-            acc_grads = [
-                self._accumulated_gradients[self._get_variable_index(v)]
-                for v in trainable_variables
-            ]
-
-            def _update_step_fn(grads, trainable_variables):
-                # Run update step with accumulated grads + reset accumulators
-                steps = self.gradient_accumulation_steps
-                grads = [
-                    (g + acc_g) / steps for g, acc_g in zip(grads, acc_grads)
-                ]
-
-                # Apply clipping and weight decay.
-                grads = self._clip_gradients(grads)
-                self._apply_weight_decay(trainable_variables)
-
-                self._backend_update_step(
-                    grads, trainable_variables, self.learning_rate
-                )
-                self._backend_reset_gradient_accumulators()
+            acc_grads = self._get_accumulated_gradients(trainable_variables)
 
             backend.ops.cond(
                 is_update_step,
-                lambda: _update_step_fn(grads, trainable_variables),
+                lambda: self._backend_apply_accumulated_gradients(
+                    grads, trainable_variables, acc_grads
+                ),
                 lambda: self._backend_increment_gradient_accumulators(
                     grads, acc_grads
                 ),
@@ -611,6 +594,28 @@ class BaseOptimizer(KerasSaveable):
                 self._backend_maybe_overwrite_model_variables(
                     self._trainable_variables
                 )
+
+    def _get_accumulated_gradients(self, trainable_variables):
+        return [
+            self._accumulated_gradients[self._get_variable_index(v)]
+            for v in trainable_variables
+        ]
+
+    def _backend_apply_accumulated_gradients(
+        self, grads, trainable_variables, acc_grads
+    ):
+        # Run update step with accumulated grads + reset accumulators
+        steps = self.gradient_accumulation_steps
+        grads = [(g + acc_g) / steps for g, acc_g in zip(grads, acc_grads)]
+
+        # Apply clipping and weight decay.
+        grads = self._clip_gradients(grads)
+        self._apply_weight_decay(trainable_variables)
+
+        self._backend_update_step(
+            grads, trainable_variables, self.learning_rate
+        )
+        self._backend_reset_gradient_accumulators()
 
     def _backend_update_step(self, grads, trainable_variables, learning_rate):
         """Collective update_step that can be overridden by the backend.
