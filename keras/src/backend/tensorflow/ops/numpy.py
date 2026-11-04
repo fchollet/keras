@@ -1482,7 +1482,11 @@ def diagonal(x, offset=0, axis1=0, axis2=1):
             tf.greater_equal(offset, x_shape[-1]),
         ),
         _zeros,
-        lambda: tf.linalg.diag_part(x, k=offset),
+        # Clamp `k` so that XLA can also compile the branch not taken.
+        lambda: tf.linalg.diag_part(
+            x,
+            k=tf.clip_by_value(offset, 1 - x_shape[-2], x_shape[-1] - 1),
+        ),
     )
 
 
@@ -3814,9 +3818,9 @@ def eye(N, M=None, k=0, dtype=None):
         return tf.eye(N, M, dtype=dtype)
     # Build the (shifted) diagonal from a mask, which also holds when
     # `abs(k)` is larger than the matrix.
-    i = tf.range(N)[:, None]
-    j = tf.range(M)[None, :]
-    return tf.cast(tf.equal(j - i, k), dtype)
+    i = tf.range(N, dtype="int64")[:, None]
+    j = tf.range(M, dtype="int64")[None, :]
+    return tf.cast(tf.equal(j - i, tf.cast(k, "int64")), dtype)
 
 
 def floor_divide(x1, x2):
