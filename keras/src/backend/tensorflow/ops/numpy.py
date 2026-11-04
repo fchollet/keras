@@ -2941,8 +2941,6 @@ def roll(x, shift, axis=None):
         # `tf.roll` requires `shift` and `axis` to have the same length,
         # while numpy broadcasts them against each other.
         if tf.is_tensor(shift) or tf.is_tensor(axis):
-            # Tensor values may not be known in Python (e.g. inside a
-            # `tf.function`), so broadcast them with TF ops.
             shape = tf.broadcast_dynamic_shape(tf.shape(shift), tf.shape(axis))
             shifts = tf.broadcast_to(shift, shape)
             axes = tf.broadcast_to(axis, shape)
