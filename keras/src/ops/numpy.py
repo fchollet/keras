@@ -9956,7 +9956,7 @@ class Correlate(Operation):
         self.mode = mode
 
     def call(self, x1, x2):
-        return backend.ops.numpy.correlate(x1, x2, mode=self.mode)
+        return _correlate(x1, x2, mode=self.mode)
 
     def compute_output_spec(self, x1, x2):
         x1_shape = getattr(x1, "shape", [])
@@ -9990,7 +9990,7 @@ class Correlate(Operation):
         )
         if output_dtype == "int64":
             output_dtype = "float64"
-        elif output_dtype not in ["bfloat16", "float16", "float64"]:
+        elif "int" in output_dtype or output_dtype == "bool":
             output_dtype = "float32"
         return KerasTensor(output_shape, dtype=output_dtype)
 
@@ -10023,7 +10023,62 @@ def correlate(x1, x2, mode="valid"):
     """
     if any_symbolic_tensors((x1, x2)):
         return Correlate(mode=mode).symbolic_call(x1, x2)
-    return backend.ops.numpy.correlate(x1, x2, mode=mode)
+    return _correlate(x1, x2, mode=mode)
+
+
+def _correlate(x1, x2, mode="valid"):
+    if not config._use_backend_agnostic_ops() and hasattr(
+        backend.ops.numpy, "correlate"
+    ):
+        return backend.ops.numpy.correlate(x1, x2, mode=mode)
+    if mode not in ("valid", "same", "full"):
+        raise ValueError(
+            "`mode` must be either `valid`, `same`, or `full`. "
+            f"Received: mode={mode}"
+        )
+    x1 = backend.ops.convert_to_tensor(x1)
+    x2 = backend.ops.convert_to_tensor(x2)
+    if len(x1.shape) != 1 or len(x2.shape) != 1:
+        raise ValueError(
+            "`x1` and `x2` must be 1-dimensional tensors. "
+            f"Received: x1.shape={x1.shape}, x2.shape={x2.shape}"
+        )
+    dtype = dtypes.result_type(x1.dtype, x2.dtype)
+    if dtype == "int64":
+        dtype = "float64"
+    elif "int" in dtype or dtype == "bool":
+        dtype = "float32"
+    x1 = backend.ops.cast(x1, dtype)
+    x2 = backend.ops.cast(x2, dtype)
+    x1_len = backend.ops.shape(x1)[0]
+    x2_len = backend.ops.shape(x2)[0]
+    full_len = x1_len + x2_len - 1
+    x1 = backend.ops.numpy.pad(x1, [(x2_len - 1, x2_len - 1)])
+    indices = backend.ops.numpy.add(
+        backend.ops.numpy.expand_dims(
+            backend.ops.numpy.arange(full_len), axis=1
+        ),
+        backend.ops.numpy.arange(x2_len),
+    )
+    output = backend.ops.numpy.matmul(backend.ops.numpy.take(x1, indices), x2)
+    if mode == "full":
+        return output
+    len_diff = builtins.abs(x1_len - x2_len)
+    shorter_len = (x1_len + x2_len - len_diff) // 2
+    if mode == "valid":
+        start = shorter_len - 1
+        output_len = len_diff + 1
+    else:
+        start = backend.ops.numpy.where(
+            backend.ops.numpy.less(x1_len, x2_len),
+            shorter_len // 2,
+            (shorter_len - 1) // 2,
+        )
+        output_len = shorter_len + len_diff
+    return backend.ops.numpy.take(
+        output,
+        backend.ops.numpy.add(backend.ops.numpy.arange(output_len), start),
+    )
 
 
 class Select(Operation):
