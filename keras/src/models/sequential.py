@@ -2,9 +2,9 @@ import copy
 import inspect
 import typing
 
-from keras.src import backend
 from keras.src import tree
 from keras.src.api_export import keras_export
+from keras.src.backend.common import get_keras_mask
 from keras.src.backend.common import global_state
 from keras.src.backend.common import standardize_shape
 from keras.src.layers.core.input_layer import InputLayer
@@ -253,7 +253,7 @@ class Sequential(Model):
                 outputs = layer(inputs)
             inputs = outputs
 
-            mask = tree.map_structure(backend.get_keras_mask, outputs)
+            mask = tree.map_structure(get_keras_mask, outputs)
         return outputs
 
     @property
@@ -346,7 +346,10 @@ class Sequential(Model):
 
     def get_config(self):
         serialize_fn = serialization_lib.serialize_keras_object
-        if global_state.get_global_attribute("use_legacy_config", False):
+        use_legacy_config = global_state.get_global_attribute(
+            "use_legacy_config", False
+        )
+        if use_legacy_config:
             # Legacy format serialization used for H5 and SavedModel formats
             serialize_fn = legacy_serialization.serialize_keras_object
         layer_configs = []
@@ -357,27 +360,28 @@ class Sequential(Model):
         config = Model.get_config(self)
         config["name"] = self.name
         config["layers"] = copy.deepcopy(layer_configs)
-        if self._functional is not None:
+        if use_legacy_config and self._functional is not None:
             config["build_input_shape"] = self._layers[0].batch_shape
         return config
 
     @classmethod
     def from_config(cls, config, custom_objects=None):
-        if "name" in config:
-            name = config["name"]
-            build_input_shape = config.get("build_input_shape")
-            layer_configs = config["layers"]
-        else:
+        if "layers" not in config:
             raise ValueError(
-                "A Sequential model configuration must be "
-                "a dictionary containing the 'name' and "
-                f"'layers' keys. Received: config={config}"
+                "A Sequential model configuration must be a dictionary "
+                f"containing the 'layers' key. Received: config={config}"
             )
-        model = cls(name=name)
+
+        kwargs = {k: v for k, v in config.items() if k in ("name", "trainable")}
+        model = cls(**kwargs)
+
+        layer_configs = config["layers"]
+        is_legacy = False
         for layer_config in layer_configs:
             if "module" not in layer_config:
                 # Legacy format deserialization (no "module" key)
                 # used for H5 and SavedModel formats
+                is_legacy = True
                 layer = saving_utils.model_from_config(
                     layer_config,
                     custom_objects=custom_objects,
@@ -387,12 +391,17 @@ class Sequential(Model):
                     layer_config,
                     custom_objects=custom_objects,
                 )
-            model.add(layer)
-        if (
-            not model._functional
-            and "build_input_shape" in locals()
-            and build_input_shape
-            and isinstance(build_input_shape, (tuple, list))
-        ):
-            model.build(build_input_shape)
+            # Do not build now, this will be done by `build_from_config`.
+            model.add(layer, rebuild=False)
+
+        if is_legacy:
+            build_input_shape = config.get("build_input_shape")
+            if (
+                not model._functional
+                and build_input_shape
+                and isinstance(build_input_shape, (tuple, list))
+            ):
+                model.build(build_input_shape)
+            else:
+                model._maybe_rebuild()
         return model

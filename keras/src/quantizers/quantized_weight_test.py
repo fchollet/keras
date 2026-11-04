@@ -10,6 +10,8 @@ from keras.src import layers
 from keras.src import models
 from keras.src import ops
 from keras.src import testing
+from keras.src.backend.common import AutocastScope
+from keras.src.backend.common import standardize_dtype
 from keras.src.quantizers import packing
 from keras.src.quantizers import strategy_registry
 from keras.src.quantizers.gptq_config import GPTQConfig
@@ -100,6 +102,15 @@ class PackLayoutTest(testing.TestCase):
         self.assertEqual(tuple(packed.shape), (3, 3))
         self.assertEqual(layout.packed_length(11), 3)
         self.assertAllClose(layout.unpack(packed), codes)
+
+    def test_ternary_pack_inverts_unpack(self):
+        rng = np.random.default_rng(0)
+        codes = rng.integers(-1, 2, (3, 11)).astype("int8")
+        layout = TernaryTrits(axis=-1, orig_len=11)
+        packed = layout.pack(codes)
+        expected, _, _ = packing.pack_ternary(codes, axis=-1)
+        self.assertAllEqual(packed, expected)
+        self.assertAllEqual(layout.unpack(packed), codes)
 
 
 class QuantizedWeightTest(testing.TestCase):
@@ -320,7 +331,7 @@ class QuantizedWeightTest(testing.TestCase):
             shape=(4, 2),
             axis=0,
         )
-        with backend.AutocastScope("bfloat16"):
+        with AutocastScope("bfloat16"):
             codes, scale = view.read_tensors()
         self.assertDType(codes, "int8")
         self.assertDType(scale, "bfloat16")
@@ -461,9 +472,7 @@ class LayerViewTest(testing.TestCase):
         )
         self.assertIsNone(layer._quantized_weight())
         # The float kernel is still what the property exposes.
-        self.assertEqual(
-            backend.standardize_dtype(layer.kernel.dtype), "float32"
-        )
+        self.assertEqual(standardize_dtype(layer.kernel.dtype), "float32")
 
 
 class QuantizationSummaryTest(testing.TestCase):

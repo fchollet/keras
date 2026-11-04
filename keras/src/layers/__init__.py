@@ -116,6 +116,7 @@ from keras.src.layers.preprocessing.image_preprocessing.max_num_bounding_box imp
     MaxNumBoundingBoxes,
 )
 from keras.src.layers.preprocessing.image_preprocessing.mix_up import MixUp
+from keras.src.layers.preprocessing.image_preprocessing.mosaic import Mosaic
 from keras.src.layers.preprocessing.image_preprocessing.rand_augment import (
     RandAugment,
 )

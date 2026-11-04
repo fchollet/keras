@@ -4,6 +4,7 @@ from keras.src import backend
 from keras.src import layers
 from keras.src import tree
 from keras.src.api_export import keras_export
+from keras.src.backend.common import standardize_dtype
 from keras.src.layers.layer import Layer
 from keras.src.layers.preprocessing.data_layer import DataLayer
 from keras.src.saving import saving_lib
@@ -673,7 +674,7 @@ class FeatureSpace(Layer):
                 dtype = tree.flatten(feature)[0].dtype
             else:
                 dtype = feature.dtype
-            dtype = backend.standardize_dtype(dtype)
+            dtype = standardize_dtype(dtype)
 
             if spec.output_mode == "one_hot":
                 preprocessor = self.preprocessors.get(

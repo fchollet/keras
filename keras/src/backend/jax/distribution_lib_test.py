@@ -9,6 +9,7 @@ import pytest
 from jax.experimental import layout as jax_layout
 from jax.sharding import PartitionSpec as P
 
+from keras.src import backend
 from keras.src import layers
 from keras.src import models
 from keras.src import testing
@@ -137,6 +138,23 @@ class JaxDistributionLibTest(testing.TestCase):
         result = distribution_lib.distribute_tensor(inputs, target_layout)
         self.assertTrue(
             result.sharding.is_equivalent_to(target_layout.sharding, ndim=2)
+        )
+
+    def test_variable_with_jax_layout(self):
+        jax_mesh = jax.sharding.Mesh(
+            np.array(jax.devices()).reshape(self.mesh_shape), ("batch", "model")
+        )
+        target_layout = self._create_jax_layout(
+            sharding=jax.sharding.NamedSharding(jax_mesh, P("batch", None))
+        )
+        variable = backend.Variable(
+            "ones", shape=(16, 16), dtype="float32", layout=target_layout
+        )
+
+        self.assertTrue(
+            variable._value.sharding.is_equivalent_to(
+                target_layout.sharding, ndim=2
+            )
         )
 
     def test_processes(self):

@@ -18,30 +18,23 @@ owns:
 - per-layer hyperparameter resolution (block size, weight bits, group size),
 - model-level orchestration hooks (calibration for structure-aware modes).
 
-The registry is internal API (`keras.src.quantizers`). Layers do not branch
-on mode strings and hold no per-mode methods; they expose their structure
-through `Layer._quantization_geometry()` and the strategies do the rest.
-Adding a mode is a registration, not an edit of every dispatch chain:
+The registry is internal API (`keras.src.quantizers`), and its set of
+modes is closed: `keras.src.quantizers.modes` registers the built-in
+modes, and Keras supports no other modes. A policy string names a mode
+only through the grammar `<mode>[/<params>]_from_<source>`, so a mode
+name never captures a plain dtype policy name such as `"int8"`.
 
-```python
-from keras.src.quantizers.strategy_registry import QuantizationStrategy
-from keras.src.quantizers.strategy_registry import (
-    register_quantization_strategy,
-)
+Layers stay open. A layer, built-in or custom, opts in to the built-in
+modes through two declarations: `Layer._quantization_geometry()` returns
+its quantizable structure, and `variable_serialization_spec` lists the
+modes it supports. The strategies build the mode's variables, run its
+forward pass and compute its quantized values through the geometry; the
+layer implements none of them. `keras.src.quantizers.geometry` ("Making a
+layer quantizable") lists what such a layer defines.
 
-class MyStrategy(QuantizationStrategy):
-    name = "my_mode"
-    ...
-
-register_quantization_strategy(MyStrategy())
-```
-
-The mode reaches a layer that lists it in its `variable_serialization_spec` and
-whose geometry family the mode lists in `geometry_families`.
-
-This module must stay import-light: it is consulted lazily from
-`keras.src.dtype_policies` and `keras.src.layers.layer`, so importing it must
-not pull in layers or policies at module level.
+`keras.src.dtype_policies` imports this module on first use, because the
+mode modules import the policy classes. `keras.src.layers.layer` imports
+this module at module level, so this module must not import layers.
 """
 
 _MODE_TO_STRATEGY = {}  # mode -> QuantizationStrategy, in registration order.
@@ -292,16 +285,8 @@ def register_quantization_strategy(strategy):
 
     The strategy is validated at registration time, not at first use:
     the name must be a non-empty string, must not be registered already,
-    must not contain the policy-grammar separators ("/" and "_from_"),
-    must not shadow a standard dtype or mixed-precision policy name, and
-    must not share a prefix with a built-in mode (built-in names are
-    routed by `str.startswith` over policy strings; externally registered
-    modes match only their exact grammar, so collisions between them are
-    unambiguous).
+    and must not contain the policy-grammar separators ("/" and "_from_").
     """
-    from keras.src import backend
-    from keras.src.dtype_policies.dtype_policy import QUANTIZATION_MODES
-
     instance = strategy() if isinstance(strategy, type) else strategy
     name = instance.name
     if not isinstance(name, str) or not name:
@@ -319,31 +304,6 @@ def register_quantization_strategy(strategy):
             "not contain '/' or '_from_', which are the policy-string "
             "grammar separators."
         )
-    if name not in QUANTIZATION_MODES:
-        try:
-            backend.standardize_dtype(name)
-            is_standard_dtype = True
-        except ValueError:
-            is_standard_dtype = False
-        if is_standard_dtype or name.startswith("mixed_"):
-            raise ValueError(
-                f"Cannot register quantization mode '{name}': its name "
-                "conflicts with a standard dtype or mixed-precision "
-                "policy name."
-            )
-    for existing in _MODE_TO_STRATEGY:
-        builtin_involved = (
-            existing in QUANTIZATION_MODES or name in QUANTIZATION_MODES
-        )
-        if builtin_involved and (
-            existing.startswith(name) or name.startswith(existing)
-        ):
-            raise ValueError(
-                f"Cannot register quantization mode '{name}': its name "
-                f"collides with registered mode '{existing}'. Built-in "
-                "mode names are routed by prefix over policy strings, so "
-                "no mode name may share a prefix with a built-in mode."
-            )
     has_config_source = (
         instance.config_cls is not None
         or instance.requires_config

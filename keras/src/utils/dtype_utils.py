@@ -1,5 +1,5 @@
-from keras.src import backend
 from keras.src import ops
+from keras.src.backend.common import standardize_dtype
 
 DTYPE_TO_SIZE = {
     **{f"float{i}": i for i in (16, 32, 64)},
@@ -44,7 +44,7 @@ def cast_to_common_dtype(tensors):
     seen_bfloat16 = False
 
     for x in tensors:
-        dtype = backend.standardize_dtype(x.dtype)
+        dtype = standardize_dtype(x.dtype)
 
         if is_float(dtype):
             if dtype == "float16":

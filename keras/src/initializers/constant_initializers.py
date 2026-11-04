@@ -1,6 +1,6 @@
 from keras.src import ops
 from keras.src.api_export import keras_export
-from keras.src.backend import standardize_dtype
+from keras.src.backend.common import standardize_dtype
 from keras.src.initializers.initializer import Initializer
 from keras.src.saving import serialization_lib
 from keras.src.utils.module_utils import scipy

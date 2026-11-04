@@ -805,6 +805,63 @@ class ConvBasicTest(testing.TestCase):
             supports_masking=False,
         )
 
+    def test_lora_load_checks_variable_count(self):
+        # A save merges the LoRA update into the kernel, so the store holds
+        # the kernel and the bias. A load sets the LoRA factors to zero.
+        layer = layers.Conv2D(4, 3, data_format="channels_last", lora_rank=2)
+        layer.build((None, 8, 8, 3))
+        layer.lora_kernel_b.assign(
+            np.random.RandomState(0).randn(2, 4).astype("float32")
+        )
+        store = {}
+        layer.save_own_variables(store)
+        new_layer = layers.Conv2D(
+            4, 3, data_format="channels_last", lora_rank=2
+        )
+        new_layer.build((None, 8, 8, 3))
+        new_layer.lora_kernel_b.assign(np.ones((2, 4), "float32"))
+        new_layer.load_own_variables(store)
+        x = np.random.RandomState(1).randn(2, 8, 8, 3).astype("float32")
+        self.assertAllClose(new_layer(x), layer(x))
+        self.assertAllClose(new_layer.lora_kernel_a, np.zeros((3, 3, 3, 2)))
+        self.assertAllClose(new_layer.lora_kernel_b, np.zeros((2, 4)))
+
+        # A store with another number of variables raises.
+        bias_free_layer = layers.Conv2D(
+            4, 3, data_format="channels_last", use_bias=False, lora_rank=2
+        )
+        bias_free_layer.build((None, 8, 8, 3))
+        with self.assertRaisesRegex(ValueError, "expected 1 variables"):
+            bias_free_layer.load_own_variables(store)
+        with self.assertRaisesRegex(ValueError, "expected 2 variables"):
+            new_layer.load_own_variables({"0": store["0"]})
+
+    def test_lora_load_weights_with_another_use_bias_raises(self):
+        # The file holds a kernel and a bias. A LoRA conv without a bias
+        # raises instead of loading the kernel and dropping the bias.
+        model = models.Sequential(
+            [
+                layers.Input((8, 8, 3)),
+                layers.Conv2D(4, 3, data_format="channels_last"),
+            ]
+        )
+        temp_filepath = os.path.join(self.get_temp_dir(), "conv.weights.h5")
+        model.save_weights(temp_filepath)
+        new_model = models.Sequential(
+            [
+                layers.Input((8, 8, 3)),
+                layers.Conv2D(
+                    4,
+                    3,
+                    data_format="channels_last",
+                    use_bias=False,
+                    lora_rank=2,
+                ),
+            ]
+        )
+        with self.assertRaisesRegex(ValueError, "expected 1 variables"):
+            new_model.load_weights(temp_filepath)
+
     @parameterized.parameters(
         (layers.Conv1D, (10, 3), 2, 10),
         (layers.Conv2D, (10, 10, 3), (2, 2), (10, 10)),

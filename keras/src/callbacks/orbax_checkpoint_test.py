@@ -538,6 +538,44 @@ class OrbaxCheckpointTest(testing.TestCase, parameterized.TestCase):
         with self.assertRaises(ValueError):
             saving.load_model(weights_only_dir)
 
+    @pytest.mark.requires_trainable_backend
+    def test_sequential_model_restores_saved_weights(self):
+        """Regression test for #23251: a Sequential model restored with
+        `load_model` must get the checkpointed weights and optimizer state,
+        not freshly initialized ones."""
+        utils.set_random_seed(123)
+        model = models.Sequential(
+            [
+                layers.Input((8,)),
+                layers.Dense(16, activation="relu"),
+                layers.Dense(1),
+            ]
+        )
+        model.compile(optimizer="adam", loss="mse")
+        x = np.random.randn(64, 8)
+        y = np.random.randn(64, 1)
+
+        checkpoint_dir = os.path.join(self.get_temp_dir(), "sequential")
+        callback = OrbaxCheckpoint(
+            directory=checkpoint_dir, save_on_background=False
+        )
+        model.fit(x, y, epochs=1, batch_size=16, callbacks=[callback])
+
+        loaded_model = saving.load_model(checkpoint_dir)
+
+        self.assertEqual(
+            [v.path for v in loaded_model.weights],
+            [v.path for v in model.weights],
+        )
+        for orig, loaded in zip(
+            model.get_weights(), loaded_model.get_weights()
+        ):
+            self.assertAllClose(orig, loaded)
+        for orig, loaded in zip(
+            model.optimizer.variables, loaded_model.optimizer.variables
+        ):
+            self.assertAllClose(orig, loaded)
+
     @parameterized.parameters(
         {"save_on_background": False},
         {"save_on_background": True},

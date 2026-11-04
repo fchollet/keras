@@ -7,6 +7,8 @@ from torch.distributed.tensor import Replicate
 
 from keras.src import backend
 from keras.src.backend.common import dtypes
+from keras.src.backend.common import is_float_dtype
+from keras.src.backend.common import standardize_dtype
 from keras.src.backend.common.backend_utils import canonicalize_axis
 from keras.src.backend.common.backend_utils import check_conv_input_channels
 from keras.src.backend.common.backend_utils import (
@@ -41,7 +43,7 @@ def sigmoid(x):
 def sparse_sigmoid(x):
     x = convert_to_tensor(x)
     float_dtype = dtypes.promote_to_float_dtype(x.dtype)
-    if float_dtype != backend.standardize_dtype(x.dtype):
+    if float_dtype != standardize_dtype(x.dtype):
         x = cast(x, float_dtype)
     return torch.where(
         x <= -1,
@@ -77,7 +79,7 @@ def softsign(x):
 def soft_shrink(x, threshold=0.5):
     x = convert_to_tensor(x)
     float_dtype = dtypes.promote_to_float_dtype(x.dtype)
-    if float_dtype != backend.standardize_dtype(x.dtype):
+    if float_dtype != standardize_dtype(x.dtype):
         x = cast(x, float_dtype)
     return tnn.softshrink(x, lambd=threshold)
 
@@ -85,7 +87,7 @@ def soft_shrink(x, threshold=0.5):
 def sparse_plus(x):
     x = convert_to_tensor(x)
     float_dtype = dtypes.promote_to_float_dtype(x.dtype)
-    if float_dtype != backend.standardize_dtype(x.dtype):
+    if float_dtype != standardize_dtype(x.dtype):
         x = cast(x, float_dtype)
     return torch.where(
         x <= -1,
@@ -115,7 +117,7 @@ def leaky_relu(x, negative_slope=0.2):
     # `tnn.leaky_relu` is not implemented for integer or bool dtypes.
     x = convert_to_tensor(x)
     float_dtype = dtypes.promote_to_float_dtype(x.dtype)
-    if float_dtype != backend.standardize_dtype(x.dtype):
+    if float_dtype != standardize_dtype(x.dtype):
         x = cast(x, float_dtype)
     return tnn.leaky_relu(x, negative_slope=negative_slope)
 
@@ -124,7 +126,7 @@ def hard_sigmoid(x):
     # `tnn.hardsigmoid` is not implemented for integer or bool dtypes.
     x = convert_to_tensor(x)
     float_dtype = dtypes.promote_to_float_dtype(x.dtype)
-    if float_dtype != backend.standardize_dtype(x.dtype):
+    if float_dtype != standardize_dtype(x.dtype):
         x = cast(x, float_dtype)
     return tnn.hardsigmoid(x)
 
@@ -132,7 +134,7 @@ def hard_sigmoid(x):
 def hard_silu(x):
     x = convert_to_tensor(x)
     float_dtype = dtypes.promote_to_float_dtype(x.dtype)
-    if float_dtype != backend.standardize_dtype(x.dtype):
+    if float_dtype != standardize_dtype(x.dtype):
         x = cast(x, float_dtype)
     return tnn.hardswish(x)
 
@@ -145,7 +147,7 @@ def elu(x, alpha=1.0):
 def selu(x):
     x = convert_to_tensor(x)
     float_dtype = dtypes.promote_to_float_dtype(x.dtype)
-    if float_dtype != backend.standardize_dtype(x.dtype):
+    if float_dtype != standardize_dtype(x.dtype):
         x = cast(x, float_dtype)
     return tnn.selu(x)
 
@@ -186,12 +188,9 @@ def threshold(x, threshold, default_value):
 
 def softmax(x, axis=-1):
     x = convert_to_tensor(x)
-    dtype = backend.standardize_dtype(x.dtype)
+    dtype = standardize_dtype(x.dtype)
     # TODO: tnn.softmax doesn't support float16 using cpu
-    if (
-        get_device() == "cpu"
-        and backend.standardize_dtype(x.dtype) == "float16"
-    ):
+    if get_device() == "cpu" and dtype == "float16":
         x = cast(x, "float32")
     if axis is None:
         # Unlike numpy, PyTorch will handle axis=None as axis=-1.
@@ -206,12 +205,9 @@ def softmax(x, axis=-1):
 
 def log_softmax(x, axis=-1):
     x = convert_to_tensor(x)
-    dtype = backend.standardize_dtype(x.dtype)
+    dtype = standardize_dtype(x.dtype)
     # TODO: tnn.log_softmax doesn't support float16 using cpu
-    if (
-        get_device() == "cpu"
-        and backend.standardize_dtype(x.dtype) == "float16"
-    ):
+    if get_device() == "cpu" and dtype == "float16":
         x = cast(x, "float32")
     if axis is None:
         # Unlike numpy, PyTorch will handle axis=None as axis=-1.
@@ -1034,7 +1030,7 @@ def sparse_categorical_crossentropy(target, output, from_logits=False, axis=-1):
 def binary_crossentropy(target, output, from_logits=False):
     target = convert_to_tensor(target)
     output = convert_to_tensor(output)
-    if not backend.is_float_dtype(output.dtype):
+    if not is_float_dtype(output.dtype):
         output = cast(output, backend.floatx())
     target = cast(target, output.dtype)
 
@@ -1074,7 +1070,7 @@ def moments(x, axes, keepdims=False, synchronized=False):
     # workaround, we simply perform the operations on float32 and convert back
     # to float16
     need_cast = False
-    ori_dtype = backend.standardize_dtype(x.dtype)
+    ori_dtype = standardize_dtype(x.dtype)
     if ori_dtype == "float16":
         need_cast = True
         x = cast(x, "float32")
@@ -1486,7 +1482,7 @@ def psnr(x1, x2, max_val):
 
 
 def _get_large_negative(dtype):
-    dtype = backend.standardize_dtype(dtype)
+    dtype = standardize_dtype(dtype)
     if dtype == "float16":
         val = 65500.0
     else:
@@ -1550,6 +1546,22 @@ def _can_use_flash_attention(
     return can_use_flash_attention(spda_params, False)
 
 
+def _causal_mask(query_length, kv_length, like):
+    """Lower-triangular boolean mask placed like the tensor `like`."""
+    causal_mask = torch.tril(
+        torch.ones(
+            (query_length, kv_length), dtype=torch.bool, device=like.device
+        )
+    )
+    if isinstance(like, DTensor):
+        causal_mask = DTensor.from_local(
+            causal_mask,
+            like.device_mesh,
+            [Replicate()] * like.device_mesh.ndim,
+        )
+    return causal_mask
+
+
 def dot_product_attention(
     query,
     key,
@@ -1586,24 +1598,22 @@ def dot_product_attention(
             # `is_causal` as mutually exclusive, so a caller-provided mask
             # would otherwise silently drop the causal constraint. Fold the
             # causal mask into the explicit mask to honor both.
-            q_len, kv_len = query.shape[1], key.shape[1]
-            causal_mask = torch.tril(
-                torch.ones(
-                    (q_len, kv_len), dtype=torch.bool, device=mask.device
-                )
+            mask = torch.logical_and(
+                mask, _causal_mask(query.shape[1], key.shape[1], mask)
             )
-            if isinstance(mask, DTensor):
-                causal_mask = DTensor.from_local(
-                    causal_mask,
-                    mask.device_mesh,
-                    [Replicate()] * mask.device_mesh.ndim,
-                )
-            mask = torch.logical_and(mask, causal_mask)
         # Explicitly set `is_causal` to `False` when `mask` is not `None`.
         is_causal = False
         mask = torch.where(mask, 0.0, _get_large_negative(query.dtype))
     if bias is not None:
         bias = convert_to_tensor(bias, dtype=compute_dtype)
+        if is_causal:
+            # The same exclusivity applies to a float `attn_mask` (the bias).
+            bias = torch.where(
+                _causal_mask(query.shape[1], key.shape[1], bias),
+                bias,
+                _get_large_negative(bias.dtype).to(bias.device),
+            )
+            is_causal = False
         mask = bias  # Use `bias` as `mask` for scaled_dot_product_attention.
 
     axis0, axis1 = 1, 2
@@ -1868,10 +1878,13 @@ def layer_normalization(x, gamma=None, beta=None, axis=-1, epsilon=None):
         inv = torch.rsqrt(variance + epsilon)
         if gamma is not None:
             inv = inv * gamma
-        res = -mean * inv
+        # Center before scaling; see the note in keras/src/ops/nn.py.
+        # Folding the mean and beta into one offset loses beta when
+        # `mean * inv` is large enough that adding beta to it rounds away.
+        outputs = (x - mean) * inv
         if beta is not None:
-            res = res + beta
-        return x * inv + res
+            outputs = outputs + beta
+        return outputs
     x, normalized_shape, (gamma, beta), perm = operands
     outputs = tnn.layer_norm(x, normalized_shape, gamma, beta, epsilon)
     return outputs.permute(_inverse_permutation(perm))

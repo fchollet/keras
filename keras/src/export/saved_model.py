@@ -3,14 +3,12 @@
 from keras.src import backend
 from keras.src.api_export import keras_export
 from keras.src.export.export_utils import get_input_signature
-from keras.src.export.neptune_model_export_archive import (
-    NeptuneModelExportArchive,
-)
 
 # Re-export for backward compatibility (used by tfsm_layer.py)
 from keras.src.export.saved_model_export_archive import (  # noqa: F401
     _list_variables_used_by_fns,
 )
+from keras.src.export.xla_saved_model_archive import XLASavedModelArchive
 from keras.src.utils.module_utils import get_pluggable_backend_module
 
 if backend.backend() == "tensorflow":
@@ -177,8 +175,8 @@ class ExportArchive:
     def __new__(cls, format="saved_model", **kwargs):
         if format == "saved_model":
             return SavedModelExportArchive()
-        elif format == "neptune_model":
-            return NeptuneModelExportArchive()
+        elif format == "xla_saved_model":
+            return XLASavedModelArchive()
         else:
             raise ValueError(f"Unsupported format: {format}")
 

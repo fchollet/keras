@@ -1,14 +1,13 @@
 import numpy as np
 from absl.testing import parameterized
 
-from keras.src import backend
 from keras.src import dtype_policies
 from keras.src import layers
 from keras.src import models
 from keras.src import ops
 from keras.src import saving
 from keras.src import testing
-from keras.src.dtype_policies.dtype_policy import QUANTIZATION_MODES
+from keras.src.backend.common import standardize_dtype
 from keras.src.quantizers import strategy_registry
 from keras.src.quantizers.awq_config import AWQConfig
 from keras.src.quantizers.geometry import LookupGeometry
@@ -18,15 +17,13 @@ from keras.src.quantizers.quantization_config import QuantizationConfig
 
 
 class StrategyRegistryTest(testing.TestCase):
-    def test_builtin_modes_match_public_tuple(self):
-        # The registration order is observable (validation error messages
-        # render the registered-names tuple), so it must stay identical to
-        # the public QUANTIZATION_MODES constant.
+    def test_builtin_modes(self):
+        # The registration order is observable: validation error messages
+        # render the registered-names tuple.
         self.assertEqual(
-            strategy_registry.registered_modes(), QUANTIZATION_MODES
+            strategy_registry.registered_modes(),
+            ("int8", "float8", "int4", "ternary", "gptq", "awq"),
         )
-        for name in QUANTIZATION_MODES:
-            self.assertIsNotNone(strategy_registry.get_strategy(name))
 
     def test_unknown_mode(self):
         self.assertIsNone(strategy_registry.get_strategy("bogus"))
@@ -51,21 +48,29 @@ class StrategyRegistryTest(testing.TestCase):
         ("existing_builtin_is_prefix", "int42"),
         ("new_is_prefix_of_builtin", "in"),
     )
-    def test_register_rejects_builtin_prefix_collisions(self, name):
-        # Built-in mode names are routed by `str.startswith` over policy
-        # strings, so no mode name may share a prefix with a built-in.
-        colliding_name = name
+    def test_mode_sharing_a_prefix_with_a_builtin_routes_by_name(self, name):
+        # A policy string names its mode by the token before the first
+        # "/" or "_from_", so a mode name may share a prefix with a
+        # built-in mode without capturing its policy strings.
+        prefixed_name = name
 
-        class Colliding(strategy_registry.QuantizationStrategy):
-            name = colliding_name
+        class Prefixed(strategy_registry.QuantizationStrategy):
+            name = prefixed_name
             requires_config = True
 
-        with self.assertRaisesRegex(ValueError, "collides"):
-            strategy_registry.register_quantization_strategy(Colliding)
+        strategy_registry.register_quantization_strategy(Prefixed)
+        try:
+            policy = dtype_policies.get(f"{name}_from_float32")
+            self.assertEqual(policy.quantization_mode, name)
+            policy = dtype_policies.get("int4/128_from_float32")
+            self.assertEqual(policy.quantization_mode, "int4")
+            policy = dtype_policies.get("int8_from_float32")
+            self.assertEqual(policy.quantization_mode, "int8")
+        finally:
+            strategy_registry.unregister_quantization_strategy(name)
 
     def test_register_allows_custom_prefix_overlap(self):
-        # Externally registered modes match only their exact grammar
-        # (name, name + "/", name + "_from_"), so two custom modes may
+        # Policy strings route by the exact mode name, so two modes may
         # share a prefix without ambiguity.
         class Custom(strategy_registry.QuantizationStrategy):
             name = "custom"
@@ -87,13 +92,10 @@ class StrategyRegistryTest(testing.TestCase):
     @parameterized.named_parameters(
         ("slash", "my/mode", "must not contain"),
         ("from_separator", "my_from_mode", "must not contain"),
-        ("standard_dtype", "float32", "conflicts with a standard dtype"),
-        ("mixed_policy", "mixed_custom", "conflicts with a standard dtype"),
     )
     def test_register_rejects_reserved_names(self, name, error):
-        # Names containing the policy-grammar separators or shadowing a
-        # standard dtype / mixed-precision policy would break ordinary
-        # policy-string parsing.
+        # A name that contains a policy-grammar separator cannot be parsed
+        # back from a policy string.
         reserved_name = name
 
         class Reserved(strategy_registry.QuantizationStrategy):
@@ -103,22 +105,29 @@ class StrategyRegistryTest(testing.TestCase):
         with self.assertRaisesRegex(ValueError, error):
             strategy_registry.register_quantization_strategy(Reserved)
 
-    def test_registered_name_does_not_capture_ordinary_policies(self):
-        # Policy strings are routed by mode name, but only through the
-        # quantized grammar (bare name, name + "/", name + "_from_"). A
-        # registered mode whose name prefixes ordinary policy strings (like
-        # "mixed" prefixing "mixed_bfloat16") must not hijack them.
-        class MixedMode(strategy_registry.QuantizationStrategy):
-            name = "mixed"
+    @parameterized.named_parameters(
+        ("prefix_of_a_policy", "mixed", "mixed_bfloat16", "bfloat16"),
+        ("dtype_name", "bfloat16", "bfloat16", "bfloat16"),
+    )
+    def test_registered_name_does_not_capture_ordinary_policies(
+        self, mode_name, policy_name, compute_dtype
+    ):
+        # Only `<mode>[/<params>]_from_<source>` names a quantized policy,
+        # so a mode name that prefixes or equals a plain policy name does
+        # not capture it.
+        registered_name = mode_name
+
+        class Mode(strategy_registry.QuantizationStrategy):
+            name = registered_name
             requires_config = True
 
-        strategy_registry.register_quantization_strategy(MixedMode)
+        strategy_registry.register_quantization_strategy(Mode)
         try:
-            policy = dtype_policies.get("mixed_bfloat16")
+            policy = dtype_policies.get(policy_name)
             self.assertIsNone(policy.quantization_mode)
-            self.assertEqual(policy.compute_dtype, "bfloat16")
+            self.assertEqual(policy.compute_dtype, compute_dtype)
         finally:
-            strategy_registry.unregister_quantization_strategy("mixed")
+            strategy_registry.unregister_quantization_strategy(mode_name)
 
     def test_register_as_decorator_keeps_the_class(self):
         # Registering returns its argument, so a decorated strategy stays
@@ -262,7 +271,9 @@ class PolicyCodecCorpusTest(testing.TestCase):
             self.assertEqual(getattr(revived, attr), value)
 
     @parameterized.named_parameters(
-        ("no_source", "int8"),
+        # A mode name without a source is a plain policy name, and "int4"
+        # is not a dtype.
+        ("no_source", "int4"),
         ("int4_zero_block", "int4/0_from_float32"),
         ("int4_garbage_block", "int4/abc_from_float32"),
         ("gptq_bad_bits", "gptq/5/128_from_float32"),
@@ -382,9 +393,7 @@ class ToyModeRegistrationTest(testing.TestCase):
 
         # The kernel is now stored in float16 and the policy is named after
         # the mode, all through the generic machinery.
-        self.assertEqual(
-            backend.standardize_dtype(layer._kernel.dtype), "float16"
-        )
+        self.assertEqual(standardize_dtype(layer._kernel.dtype), "float16")
         self.assertEqual(layer.dtype_policy.name, "demo_half_from_float32")
         self.assertEqual(layer.quantization_mode, "demo_half")
         self.assertTrue(layer._is_quantized)

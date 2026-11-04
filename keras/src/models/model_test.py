@@ -17,6 +17,7 @@ from keras.src import losses
 from keras.src import ops
 from keras.src import testing
 from keras.src import tree
+from keras.src.backend.common import standardize_dtype
 from keras.src.dtype_policies.dtype_policy_map import DTypePolicyMap
 from keras.src.layers.core.input_layer import Input
 from keras.src.models.functional import Functional
@@ -951,9 +952,7 @@ class ModelTest(testing.TestCase):
             for weight in model.weights:
                 if weight.name == "kernel":
                     kernel_count += 1
-                    self.assertEqual(
-                        backend.standardize_dtype(weight.dtype), "int8"
-                    )
+                    self.assertEqual(standardize_dtype(weight.dtype), "int8")
             self.assertEqual(kernel_count, 3)
         if mode == "float8":
             # kernel + bias + scale * 3 + amax_history * 3 == 8
@@ -1177,9 +1176,7 @@ class ModelTest(testing.TestCase):
             self.assertEqual(layer.dtype_policy.name, pre)
             self.assertFalse(getattr(layer, "_is_quantized", False))
             self.assertFalse(hasattr(layer, "quantized_kernel"))
-            self.assertEqual(
-                backend.standardize_dtype(layer.kernel.dtype), "float32"
-            )
+            self.assertEqual(standardize_dtype(layer.kernel.dtype), "float32")
         # No report is attached when the call aborts before quantizing.
         self.assertFalse(hasattr(model, "_quantization_report"))
 

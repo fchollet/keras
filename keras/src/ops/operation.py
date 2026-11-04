@@ -270,9 +270,9 @@ class Operation(KerasSaveable):
             config.update(self._auto_config.config)
             init_params = inspect.signature(self.__init__).parameters
             init_has_name = "name" in init_params
-            init_has_kwargs = (
-                "kwargs" in init_params
-                and init_params["kwargs"].kind == inspect.Parameter.VAR_KEYWORD
+            init_has_kwargs = any(
+                p.kind == inspect.Parameter.VAR_KEYWORD
+                for p in init_params.values()
             )
             if not init_has_name and not init_has_kwargs:
                 # We can't pass `name` back to `__init__`, remove it.

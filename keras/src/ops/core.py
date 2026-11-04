@@ -6,6 +6,7 @@ from keras.src import tree
 from keras.src.api_export import keras_export
 from keras.src.backend import KerasTensor
 from keras.src.backend import any_symbolic_tensors
+from keras.src.backend.common import standardize_dtype
 from keras.src.backend.common.backend_utils import canonicalize_axis
 from keras.src.backend.common.backend_utils import slice_along_axis
 from keras.src.ops.operation import Operation
@@ -847,7 +848,7 @@ def dtype(x):
     'float32'
 
     """
-    return backend.standardize_dtype(x.dtype)
+    return standardize_dtype(x.dtype)
 
 
 class Cast(Operation):
@@ -878,7 +879,7 @@ def cast(x, dtype):
     >>> x = keras.ops.arange(4)
     >>> x = keras.ops.cast(x, dtype="float16")
     """
-    dtype = backend.standardize_dtype(dtype)
+    dtype = standardize_dtype(dtype)
     if any_symbolic_tensors((x,)):
         return Cast(dtype=dtype)(x)
     return backend.ops.core.cast(x, dtype)
@@ -943,7 +944,7 @@ def saturate_cast(x, dtype):
     >>> #  [255 255 255 255]]
 
     """
-    dtype = backend.standardize_dtype(dtype)
+    dtype = standardize_dtype(dtype)
     if any_symbolic_tensors((x,)):
         return SaturateCast(dtype=dtype)(x)
     return _saturate_cast(x, dtype)
@@ -964,8 +965,8 @@ def _saturate_cast(x, dtype, backend_module=None):
             dtype_max = ml_dtypes.finfo(dtype).max
         return dtype_min, dtype_max
 
-    dtype = backend.standardize_dtype(dtype)
-    in_dtype = backend.standardize_dtype(x.dtype)
+    dtype = standardize_dtype(dtype)
+    in_dtype = standardize_dtype(x.dtype)
     in_min, in_max = get_dtype_min_max(in_dtype)
     out_min, out_max = get_dtype_min_max(dtype)
 
@@ -1002,11 +1003,7 @@ class ConvertToTensor(Operation):
         )
 
     def compute_output_spec(self, x):
-        dtype = (
-            backend.standardize_dtype(x.dtype)
-            if self.dtype is None
-            else self.dtype
-        )
+        dtype = standardize_dtype(x.dtype) if self.dtype is None else self.dtype
         sparse = (
             False if self.sparse is not None and not self.sparse else x.sparse
         )
@@ -1043,7 +1040,7 @@ def convert_to_tensor(x, dtype=None, sparse=None, ragged=None):
     >>> x = np.array([1, 2, 3])
     >>> y = keras.ops.convert_to_tensor(x)
     """
-    dtype = None if dtype is None else backend.standardize_dtype(dtype)
+    dtype = None if dtype is None else standardize_dtype(dtype)
     if any_symbolic_tensors((x,)):
         return ConvertToTensor(dtype=dtype, sparse=sparse, ragged=ragged)(x)
     return backend.ops.core.convert_to_tensor(

@@ -30,6 +30,14 @@ pip install keras --upgrade
 To use `keras`, you should also install the backend of choice: `tensorflow`, `jax`, or `torch`. Additionally,
 The `openvino` backend is available with support for model inference only.
 
+3. (Optional) Install remote file access support.
+
+To save to and load from Google Cloud Storage (`gs://` paths) without TensorFlow, install the `gcs` extra:
+
+```
+pip install "keras[gcs]"
+```
+
 ### Local installation
 
 #### Minimal installation
@@ -63,7 +71,7 @@ The following table lists the minimum supported versions of each backend for the
 |------------|---------------------------|
 | TensorFlow | 2.16.1                    |
 | JAX        | 0.4.20                    |
-| PyTorch    | 2.1.0                     |
+| PyTorch    | 2.6.0                     |
 | OpenVINO   | 2026.2.0                  |
 
 #### Adding GPU support

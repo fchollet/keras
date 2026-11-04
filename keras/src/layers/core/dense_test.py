@@ -18,6 +18,7 @@ from keras.src import random
 from keras.src import saving
 from keras.src import testing
 from keras.src.backend.common import keras_tensor
+from keras.src.backend.common import standardize_dtype
 from keras.src.quantizers.awq_config import AWQConfig
 from keras.src.quantizers.gptq_config import GPTQConfig
 from keras.src.quantizers.quantization_config import Int4QuantizationConfig
@@ -79,9 +80,7 @@ class DenseTest(testing.TestCase):
 
         if mode == "int4":
             # Verify kernel is int8 (packed int4)
-            self.assertEqual(
-                backend.standardize_dtype(layer._kernel.dtype), "int8"
-            )
+            self.assertEqual(standardize_dtype(layer._kernel.dtype), "int8")
 
     def test_dense_basics(self):
         # 2D case, no bias.
@@ -480,9 +479,9 @@ class DenseTest(testing.TestCase):
         # Verify the dtype of the weights.
         # The kernel's data type is int8, despite the int4 quantization, because
         # we pack the int4 values into int8.
-        self.assertEqual(backend.standardize_dtype(layer._kernel.dtype), "int8")
+        self.assertEqual(standardize_dtype(layer._kernel.dtype), "int8")
         self.assertEqual(
-            backend.standardize_dtype(layer.kernel_scale.dtype),
+            standardize_dtype(layer.kernel_scale.dtype),
             layer.variable_dtype,
         )
 
@@ -588,7 +587,7 @@ class DenseTest(testing.TestCase):
 
     @parameterized.named_parameters(
         ("int8", "int8_from_float32", 3),
-        ("int4", "int4_from_float32", 5),  # bias + kernel + scale + zero + gidx
+        ("int4", "int4_from_float32", 3),  # kernel + bias + scale
         ("float8", "float8_from_float32", 8),
     )
     @pytest.mark.skipif(
@@ -1882,9 +1881,7 @@ class DenseTest(testing.TestCase):
 
         self.assertEqual(layer.quantization_mode, "ternary")
         # The float kernel is replaced by the packed codes.
-        self.assertEqual(
-            backend.standardize_dtype(layer._kernel.dtype), "uint8"
-        )
+        self.assertEqual(standardize_dtype(layer._kernel.dtype), "uint8")
         # Packed along the output axis: ceil(16 / 5) = 4 bytes per row.
         self.assertEqual(tuple(layer._kernel.shape), (11, 4))
 
@@ -2010,9 +2007,7 @@ class DenseTest(testing.TestCase):
         layer.build((None, 10))
         self.assertTrue(layer.built)
         self.assertEqual(layer.quantization_mode, "ternary")
-        self.assertEqual(
-            backend.standardize_dtype(layer._kernel.dtype), "uint8"
-        )
+        self.assertEqual(standardize_dtype(layer._kernel.dtype), "uint8")
         # ceil(8 / 5) = 2 bytes per row
         self.assertEqual(tuple(layer._kernel.shape), (10, 2))
         x = np.random.rand(3, 10).astype("float32")
@@ -2055,8 +2050,8 @@ class DenseTest(testing.TestCase):
             v_cfg = vars_cfg[name]
             self.assertEqual(tuple(v_str.shape), tuple(v_cfg.shape))
             self.assertEqual(
-                backend.standardize_dtype(v_str.dtype),
-                backend.standardize_dtype(v_cfg.dtype),
+                standardize_dtype(v_str.dtype),
+                standardize_dtype(v_cfg.dtype),
             )
             self.assertAllClose(v_str, v_cfg)
 
@@ -2122,7 +2117,7 @@ class DenseTest(testing.TestCase):
         self.assertEqual(
             tuple(layer._kernel.shape), (input_dim, (output_dim + 1) // 2)
         )
-        self.assertEqual(backend.standardize_dtype(layer._kernel.dtype), "int8")
+        self.assertEqual(standardize_dtype(layer._kernel.dtype), "int8")
 
         # A forward pass runs without error.
         x = np.random.random((2, input_dim)).astype("float32")
