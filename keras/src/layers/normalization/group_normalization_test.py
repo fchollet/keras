@@ -1,12 +1,12 @@
 import numpy as np
 
-from keras.src import backend
 from keras.src import constraints
 from keras.src import initializers
 from keras.src import layers
 from keras.src import ops
 from keras.src import regularizers
 from keras.src import testing
+from keras.src.backend.common import AutocastScope
 
 
 class GroupNormalizationTest(testing.TestCase):
@@ -198,7 +198,7 @@ class GroupNormalizationTest(testing.TestCase):
         layer.build((1, 2, 4))
         # Use 70000 to trigger overflow for float16
         large_value = ops.full(layer.gamma.shape, 70000)
-        with backend.AutocastScope("float16"):
+        with AutocastScope("float16"):
             layer.gamma.assign(large_value)
             self.assertAllClose(layer.gamma.value, large_value)
 

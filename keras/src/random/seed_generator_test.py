@@ -5,6 +5,7 @@ from keras.src import backend
 from keras.src import ops
 from keras.src import random
 from keras.src import testing
+from keras.src.backend.common import standardize_dtype
 from keras.src.random import seed_generator
 
 
@@ -44,7 +45,7 @@ class SeedGeneratorTest(testing.TestCase):
         seed = gen.next()
         self.assertEqual(gen.state.dtype, backend.ops.random_seed_dtype())
         self.assertEqual(
-            backend.standardize_dtype(seed.dtype),
+            standardize_dtype(seed.dtype),
             backend.ops.random_seed_dtype(),
         )
 
@@ -57,7 +58,7 @@ class SeedGeneratorTest(testing.TestCase):
         seed2 = seed_generator.draw_seed(12345)
         self.assertTrue(backend.ops.is_tensor(seed2))
         self.assertEqual(
-            backend.standardize_dtype(seed2.dtype),
+            standardize_dtype(seed2.dtype),
             backend.ops.random_seed_dtype(),
         )
 
@@ -68,7 +69,7 @@ class SeedGeneratorTest(testing.TestCase):
             seed = seed_generator.draw_seed(s)
             self.assertTrue(backend.ops.is_tensor(seed))
             self.assertEqual(
-                backend.standardize_dtype(seed.dtype),
+                standardize_dtype(seed.dtype),
                 backend.ops.random_seed_dtype(),
             )
             # Verify the seed can be consumed by a random op without error.

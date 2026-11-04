@@ -8,7 +8,7 @@ import numpy as np
 from keras.src import backend
 from keras.src import tree
 from keras.src.api_export import keras_export
-from keras.src.backend.common.variables import is_float_dtype
+from keras.src.backend.common import is_float_dtype
 from keras.src.backend.common.variables import standardize_dtype
 from keras.src.layers.layer import Layer
 from keras.src.random.seed_generator import draw_seed

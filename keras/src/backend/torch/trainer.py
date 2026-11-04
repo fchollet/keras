@@ -5,6 +5,7 @@ import torch
 import torch.distributed as dist
 from torch.distributed.tensor import DTensor
 from torch.distributed.tensor import Replicate
+from torch.distributed.tensor import Shard
 from torch.nn.parallel import DistributedDataParallel
 
 from keras.src import backend
@@ -313,7 +314,9 @@ class Trainer(BaseTrainer):
             outputs = []
             with torch.no_grad():
                 for step_data in data:
-                    outputs.append(predict_step(step_data))
+                    outputs.append(
+                        _gather_non_batch_axes(predict_step(step_data))
+                    )
 
             def concat_outputs(outputs):
                 if not outputs:
@@ -672,6 +675,31 @@ class Trainer(BaseTrainer):
             backend.ops.convert_to_numpy, batch_outputs
         )
         return batch_outputs
+
+
+def _gather_non_batch_axes(data):
+    """Gathers sharded outputs along every mesh axis but the batch axis.
+
+    This is the inverse of `_distribute_data`: each process gets every
+    feature of the rows that it fed in.
+    """
+    active_distribution = distribution()
+    if active_distribution is None:
+        return data
+    batch_dim_name = active_distribution.batch_dim_name
+
+    def gather(x):
+        if not isinstance(x, DTensor):
+            return x
+        mesh = x.device_mesh
+        names = mesh.mesh_dim_names or (None,) * mesh.ndim
+        placements = [
+            Shard(0) if x.ndim and name == batch_dim_name else Replicate()
+            for name in names
+        ]
+        return x.redistribute(mesh, placements).to_local()
+
+    return tree.map_structure(gather, data)
 
 
 def _distribute_data(data, layouts=None):

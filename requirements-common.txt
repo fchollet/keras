@@ -33,3 +33,5 @@ tf2onnx
 grain
 # for orbax_checkpoint_test.py
 orbax-checkpoint
+# for remote file access
+etils[epath]

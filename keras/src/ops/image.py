@@ -3,6 +3,8 @@ from keras.src import ops
 from keras.src.api_export import keras_export
 from keras.src.backend import KerasTensor
 from keras.src.backend import any_symbolic_tensors
+from keras.src.backend.common import is_float_dtype
+from keras.src.backend.common import is_int_dtype
 from keras.src.ops.operation import Operation
 from keras.src.ops.operation_utils import compute_conv_output_shape
 
@@ -99,7 +101,7 @@ class RGBToHSV(Operation):
                 "or rank 4 (batch of images). "
                 f"Received: images.shape={images_shape}"
             )
-        if not backend.is_float_dtype(dtype):
+        if not is_float_dtype(dtype):
             raise ValueError(
                 "Invalid images dtype: expected float dtype. "
                 f"Received: images.dtype={dtype}"
@@ -180,7 +182,7 @@ class HSVToRGB(Operation):
                 "or rank 4 (batch of images). "
                 f"Received: images.shape={images_shape}"
             )
-        if not backend.is_float_dtype(dtype):
+        if not is_float_dtype(dtype):
             raise ValueError(
                 "Invalid images dtype: expected float dtype. "
                 f"Received: images.dtype={dtype}"
@@ -432,7 +434,7 @@ def _resize(
         # Only `torch` backend will cast result to original dtype with
         # correct rounding and without dtype overflow
         return resized
-    if backend.is_int_dtype(images.dtype):
+    if is_int_dtype(images.dtype):
         resized = ops.round(resized)
     return ops.saturate_cast(resized, images.dtype)
 

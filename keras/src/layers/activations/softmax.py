@@ -1,12 +1,13 @@
 from keras.src import activations
 from keras.src import backend
 from keras.src.api_export import keras_export
+from keras.src.backend.common import standardize_dtype
 from keras.src.layers.layer import Layer
 
 
 def _large_negative_number(dtype):
     """Return a Large negative number based on dtype."""
-    if backend.standardize_dtype(dtype) == "float16":
+    if standardize_dtype(dtype) == "float16":
         return -3e4
     return -1e9
 
@@ -74,7 +75,7 @@ class Softmax(Layer):
                         )
             # We keep the positions where the mask is True or > 0.5, and set the
             # other (masked) positions to -1e.9.
-            if backend.standardize_dtype(mask.dtype) != "bool":
+            if standardize_dtype(mask.dtype) != "bool":
                 mask = backend.ops.numpy.greater(
                     mask, backend.ops.cast(0.5, dtype=mask.dtype)
                 )

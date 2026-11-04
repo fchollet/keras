@@ -441,7 +441,9 @@ class Model(Trainer, Layer):
             the inputs should be passed through, before being passed to
             the sequential blocks. For example, inputs to an LLM must
             first be passed through an embedding layer, followed by
-            the transformer.
+            the transformer. `'pre_block_layers'` may be left out, and
+            each value is a list or a tuple. A structure with any other
+            key is refused with a `ValueError`.
         """
         del mode  # Unused.
         return None

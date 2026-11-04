@@ -4,6 +4,7 @@ from keras.src import backend
 from keras.src import ops
 from keras.src import tree
 from keras.src.api_export import keras_export
+from keras.src.backend.common import standardize_dtype
 
 NUM_BATCHES_FOR_TENSOR_SPEC = 2
 
@@ -197,7 +198,7 @@ def get_keras_tensor_spec(batches):
             dims_set = set(dims)
             shape.append(dims_set.pop() if len(dims_set) == 1 else None)
 
-        dtype = backend.standardize_dtype(x.dtype)
+        dtype = standardize_dtype(x.dtype)
         if is_tensorflow_ragged(x):
             return backend.KerasTensor(
                 shape=shape,

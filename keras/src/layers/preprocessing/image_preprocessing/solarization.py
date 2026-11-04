@@ -1,5 +1,5 @@
-from keras.src import backend
 from keras.src.api_export import keras_export
+from keras.src.backend.common import is_int_dtype
 from keras.src.layers.preprocessing.image_preprocessing.base_image_preprocessing_layer import (  # noqa: E501
     BaseImagePreprocessingLayer,
 )
@@ -185,7 +185,7 @@ class Solarization(BaseImagePreprocessingLayer):
             )
             if results.dtype == images.dtype:
                 return results
-            if backend.is_int_dtype(images.dtype):
+            if is_int_dtype(images.dtype):
                 results = self.backend.ops.numpy.round(results)
             return _saturate_cast(results, images.dtype, self.backend)
         return images

@@ -526,25 +526,17 @@ class SerializationLibTest(testing.TestCase):
         )
         self.assertIs(restored_layer.activation, gelu)
 
-    def test_missing_name_for_sequential_model(self):
+    def test_missing_layers_for_sequential_model(self):
         """Tests serialization when sequential model has no name."""
         serialized = {
             "class_name": "Sequential",
             "module": "keras",
-            "config": {
-                "layers": [
-                    {
-                        "class_name": "Dense",
-                        "module": "keras.layers",
-                        "config": {"units": 4},
-                    }
-                ],
-            },
+            "config": {"name": "sequential_model"},
         }
         with self.assertRaisesRegex(
             ValueError,
             "A Sequential model configuration must be a "
-            "dictionary containing the 'name' and 'layers' keys",
+            "dictionary containing the 'layers' key",
         ):
             deserialize_keras_object(serialized)
 

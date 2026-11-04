@@ -1,4 +1,9 @@
+import contextlib
+
 import numpy as np
+
+from keras.src.backend import config
+from keras.src.utils.module_utils import jax
 
 
 def get_test_data(
@@ -161,6 +166,42 @@ def named_product(*args, **kwargs):
         tests = new_tests
 
     return tests
+
+
+@contextlib.contextmanager
+def x64_mode_scope(mode):
+    """Runs the block with `keras.config.x64_mode()` set to `mode`.
+
+    JAX is the reference for the dtype tests, so when it is installed it is
+    put in the matching mode on every backend. Both settings are restored
+    afterwards.
+
+    Args:
+        mode: `"off"` or `"explicit_x64"`.
+    """
+    # JAX's flag is set first and restored first, so it always matches the
+    # Keras mode when `set_x64_mode` reconciles the two.
+    previous_mode = config.x64_mode()
+    try:
+        with _jax_explicit_x64_scope(mode == "explicit_x64"):
+            config.set_x64_mode(mode)
+            yield
+    finally:
+        config.set_x64_mode(previous_mode)
+
+
+@contextlib.contextmanager
+def _jax_explicit_x64_scope(allow):
+    """Sets `jax_explicit_x64_dtypes` for the block, if JAX is installed."""
+    if not jax.available:
+        yield
+        return
+    previous = jax.config.jax_explicit_x64_dtypes
+    jax.config.update("jax_explicit_x64_dtypes", "allow" if allow else "warn")
+    try:
+        yield
+    finally:
+        jax.config.update("jax_explicit_x64_dtypes", previous)
 
 
 def serialized_variable(layer, name):

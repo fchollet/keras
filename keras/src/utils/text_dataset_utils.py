@@ -2,6 +2,7 @@ import numpy as np
 
 from keras.src.api_export import keras_export
 from keras.src.utils import dataset_utils
+from keras.src.utils import file_utils
 from keras.src.utils.grain_utils import make_string_batch
 from keras.src.utils.module_utils import grain
 from keras.src.utils.module_utils import tensorflow as tf
@@ -409,7 +410,7 @@ def _paths_and_labels_to_dataset_grain(
 
 
 def _path_to_string_content_grain(path, max_length):
-    with open(path, "r") as f:
+    with file_utils.File(path, "r") as f:
         txt = f.read()
     if max_length is not None:
         txt = txt[:max_length]

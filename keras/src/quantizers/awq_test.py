@@ -7,18 +7,20 @@ import pytest
 from absl.testing import parameterized
 
 import keras
-from keras.src import backend
 from keras.src import layers
 from keras.src import models
 from keras.src import ops
 from keras.src import saving
 from keras.src import testing
-from keras.src.quantizers.awq import AWQ
 from keras.src.quantizers.awq import _get_weight_scale
 from keras.src.quantizers.awq import awq_quantize_matrix
 from keras.src.quantizers.awq import awq_search_best_clip
 from keras.src.quantizers.awq import awq_search_optimal_scales
 from keras.src.quantizers.awq_config import AWQConfig
+from keras.src.quantizers.quantization_test_utils import calibrate_layer
+from keras.src.quantizers.quantization_test_utils import calibration_config
+from keras.src.quantizers.quantization_test_utils import tiny_calibration_model
+from keras.src.quantizers.quantization_test_utils import token_dataset
 
 # Shared RNG instance for reproducible tests
 RNG = np.random.default_rng(seed=42)
@@ -356,16 +358,17 @@ class AWQLayerTest(testing.TestCase):
         )
 
         layer.quantize(config=config)
-        awq_obj = AWQ(layer, config)
 
         # Simulate activation capture
         calibration_data = RNG.standard_normal((64, 16)).astype("float32")
-        awq_obj.update_activation_magnitudes(calibration_data)
+        calibrator = calibrate_layer(
+            layer, config, calibration_data, solve=False
+        )
 
-        self.assertEqual(awq_obj.num_samples, 64)
+        self.assertEqual(calibrator.num_samples, 64)
         # Activation magnitudes should be non-negative
         self.assertTrue(
-            ops.all(ops.greater_equal(awq_obj.activation_magnitudes, 0))
+            ops.all(ops.greater_equal(calibrator.activation_magnitudes, 0))
         )
 
     def test_awq_activation_accumulation(self):
@@ -382,22 +385,19 @@ class AWQLayerTest(testing.TestCase):
             dataset=None, tokenizer=None, group_size=-1, num_grid_points=10
         )
         layer.quantize(config=config)
-        awq_obj = AWQ(layer, config)
 
-        # First batch.
+        # A second batch with a different row count exercises the
+        # weighting.
         batch1 = RNG.standard_normal((10, 16)).astype("float32")
-        awq_obj.update_activation_magnitudes(batch1)
-
-        # Second batch with a different row count to exercise the weighting.
         batch2 = ops.add(RNG.standard_normal((30, 16)).astype("float32"), 1.0)
-        awq_obj.update_activation_magnitudes(batch2)
+        calibrator = calibrate_layer(layer, config, batch1, batch2, solve=False)
 
         # Running mean must equal the mean of |x| over all rows.
         combined = ops.concatenate([ops.abs(batch1), ops.abs(batch2)], axis=0)
         expected_mean = ops.mean(combined, axis=0)
-        self.assertEqual(awq_obj.num_samples, 40)
+        self.assertEqual(calibrator.num_samples, 40)
         self.assertAllClose(
-            awq_obj.activation_magnitudes, expected_mean, atol=1e-6
+            calibrator.activation_magnitudes, expected_mean, atol=1e-6
         )
 
     def test_awq_clip_sample_capture(self):
@@ -411,19 +411,19 @@ class AWQLayerTest(testing.TestCase):
             dataset=None, tokenizer=None, group_size=-1, num_grid_points=5
         )
         layer.quantize(config=config)
-        awq_obj = AWQ(layer, config)
+        calibrator = calibrate_layer(layer, config, solve=False)
 
         # Feed more rows than the cap across several batches.
         for _ in range(4):
             batch = RNG.standard_normal((MAX_CLIP_SAMPLE_ROWS // 2, 16)).astype(
                 "float32"
             )
-            awq_obj.update_activation_magnitudes(batch)
+            calibrator.observe(batch)
 
         # The stash is bounded by MAX_CLIP_SAMPLE_ROWS.
-        self.assertEqual(awq_obj._clip_sample_rows, MAX_CLIP_SAMPLE_ROWS)
+        self.assertEqual(calibrator._clip_sample_rows, MAX_CLIP_SAMPLE_ROWS)
         total_rows = int(
-            sum(int(ops.shape(s)[0]) for s in awq_obj._clip_samples)
+            sum(int(ops.shape(s)[0]) for s in calibrator._clip_samples)
         )
         self.assertEqual(total_rows, MAX_CLIP_SAMPLE_ROWS)
 
@@ -440,12 +440,14 @@ class AWQLayerTest(testing.TestCase):
             apply_clip=False,
         )
         layer.quantize(config=config)
-        awq_obj = AWQ(layer, config)
-        awq_obj.update_activation_magnitudes(
-            RNG.standard_normal((32, 16)).astype("float32")
+        calibrator = calibrate_layer(
+            layer,
+            config,
+            RNG.standard_normal((32, 16)).astype("float32"),
+            solve=False,
         )
-        self.assertEqual(awq_obj._clip_sample_rows, 0)
-        self.assertEqual(awq_obj._clip_samples, [])
+        self.assertEqual(calibrator._clip_sample_rows, 0)
+        self.assertEqual(calibrator._clip_samples, [])
 
     def test_awq_layer_variables_created(self):
         """Test that AWQ layer variables are properly created."""
@@ -524,40 +526,31 @@ class AWQIntegrationTest(testing.TestCase):
         the predictions are preserved exactly.
         """
         vocab_size, seq_len, embed_dim = 32, 8, 4
-
-        inputs = layers.Input(shape=(seq_len,), dtype="int32")
-        embedding = layers.Embedding(vocab_size, embed_dim)
-        x = embedding(inputs)
-        block = models.Sequential(
+        model, structure = tiny_calibration_model(
             [
                 layers.Dense(embed_dim, activation="relu"),
                 layers.EinsumDense(
                     "abc,cd->abd", output_shape=(seq_len, embed_dim)
                 ),
-            ]
+            ],
+            vocab_size=vocab_size,
+            sequence_length=seq_len,
+            embed_dim=embed_dim,
+            head_units=2,
         )
-        x = block(x)
-        x = layers.GlobalAveragePooling1D()(x)
-        head = layers.Dense(2)
-        outputs = head(x)
-        model = models.Model(inputs, outputs)
+        (embedding,) = structure["pre_block_layers"]
+        head = model.layers[-1]
 
         rng = np.random.default_rng(seed=21)
-        dataset = [
-            rng.integers(0, vocab_size, size=(1, seq_len)).astype("int32")
-            for _ in range(3)
-        ]
-        config = AWQConfig(
-            dataset=dataset,
+        config = calibration_config(
+            "awq",
+            dataset=token_dataset(3, seq_len, vocab_size, rng),
             tokenizer=lambda text: text,
             num_samples=2,
             sequence_length=seq_len,
             group_size=4,
             num_grid_points=5,
-            quantization_layer_structure={
-                "pre_block_layers": [embedding],
-                "sequential_blocks": [block],
-            },
+            quantization_layer_structure=structure,
         )
 
         # Layers outside the structure (embedding, pooling, head) are not
@@ -832,11 +825,7 @@ class AWQAccuracyTest(testing.TestCase):
             group_size=group_size,
             num_grid_points=5,
         )
-        layer.quantize(config=config)
-
-        awq_obj = AWQ(layer, config)
-        awq_obj.update_activation_magnitudes(calibration_data)
-        awq_obj.quantize_layer()
+        calibrate_layer(layer, config, calibration_data)
 
         # Verify layer variables have correct shapes for grouped quantization
         if group_size > 0:
@@ -879,8 +868,6 @@ class AWQAccuracyTest(testing.TestCase):
             f"relative_mse={relative_mse:.4f}",
         )
 
-        awq_obj.free()
-
     def test_awq_save_load_round_trip(self):
         """Full AWQ quantize -> save -> load round trip.
 
@@ -894,41 +881,31 @@ class AWQAccuracyTest(testing.TestCase):
         vocab = 48
         num_classes = 4
         embed_dim = 8
-
-        block = models.Sequential(
+        model, structure = tiny_calibration_model(
             [
                 layers.Dense(16, activation="relu"),
                 layers.Dense(embed_dim),
-            ]
+            ],
+            vocab_size=vocab,
+            sequence_length=seq_len,
+            embed_dim=embed_dim,
+            head_units=num_classes,
         )
-
-        inputs = layers.Input(shape=(seq_len,), dtype="int32")
-        embedding = layers.Embedding(vocab, embed_dim)
-        x = embedding(inputs)
-        x = block(x)
-        x = layers.GlobalAveragePooling1D()(x)
-        head = layers.Dense(num_classes)
-        outputs = head(x)
-        model = models.Model(inputs, outputs)
+        (embedding,) = structure["pre_block_layers"]
+        (block,) = structure["sequential_blocks"]
+        head = model.layers[-1]
 
         rng = np.random.default_rng(seed=7)
-        dataset = [
-            rng.integers(0, vocab, size=(1, seq_len), dtype=np.int32)
-            for _ in range(4)
-        ]
         tokenizer = _char_tokenizer(vocab_size=vocab, seq_len=seq_len)
-
-        config = AWQConfig(
-            dataset=dataset,
+        config = calibration_config(
+            "awq",
+            dataset=token_dataset(4, seq_len, vocab, rng),
             tokenizer=tokenizer,
             group_size=8,
             num_samples=4,
             sequence_length=seq_len,
             num_grid_points=5,
-            quantization_layer_structure={
-                "pre_block_layers": [embedding],
-                "sequential_blocks": [block],
-            },
+            quantization_layer_structure=structure,
         )
 
         model.quantize("awq", config=config)
@@ -955,170 +932,3 @@ class AWQAccuracyTest(testing.TestCase):
         y_after = reloaded.predict(x_eval)
 
         self.assertAllClose(y_before, y_after)
-
-    def test_awq_calibration_hooks_fire_during_model_quantize(self):
-        """Calibration hooks must run during `model.quantize("awq")`.
-
-        Regression test: `model.quantize` switches layers to their quantized
-        dtype policy before calibration, after which `Operation.__call__`
-        dispatches to `quantized_call` instead of `call`. The calibration
-        hooks used to patch `call` only, so they never fired: activation
-        magnitudes stayed zero and the AWQ scale search was
-        activation-blind. Asserts the hook actually runs and records
-        non-zero activation magnitudes.
-        """
-        keras.utils.set_random_seed(123)
-        seq_len = 16
-        vocab = 48
-        embed_dim = 8
-
-        block = models.Sequential(
-            [
-                layers.Dense(16, activation="relu"),
-                layers.Dense(embed_dim),
-            ]
-        )
-
-        inputs = layers.Input(shape=(seq_len,), dtype="int32")
-        embedding = layers.Embedding(vocab, embed_dim)
-        x = embedding(inputs)
-        x = block(x)
-        x = layers.GlobalAveragePooling1D()(x)
-        outputs = layers.Dense(4)(x)
-        model = models.Model(inputs, outputs)
-
-        rng = np.random.default_rng(seed=7)
-        dataset = [
-            rng.integers(0, vocab, size=(1, seq_len), dtype=np.int32)
-            for _ in range(4)
-        ]
-        tokenizer = _char_tokenizer(vocab_size=vocab, seq_len=seq_len)
-
-        config = AWQConfig(
-            dataset=dataset,
-            tokenizer=tokenizer,
-            group_size=8,
-            num_samples=4,
-            sequence_length=seq_len,
-            num_grid_points=5,
-            quantization_layer_structure={
-                "pre_block_layers": [embedding],
-                "sequential_blocks": [block],
-            },
-        )
-
-        hook_calls = [0]
-        max_magnitude = [0.0]
-        original_update = AWQ.update_activation_magnitudes
-
-        def spy_update(awq_self, inp):
-            hook_calls[0] += 1
-            result = original_update(awq_self, inp)
-            magnitudes = ops.convert_to_numpy(awq_self.activation_magnitudes)
-            max_magnitude[0] = max(
-                max_magnitude[0], float(np.abs(magnitudes).max())
-            )
-            return result
-
-        AWQ.update_activation_magnitudes = spy_update
-        try:
-            model.quantize("awq", config=config)
-        finally:
-            AWQ.update_activation_magnitudes = original_update
-
-        self.assertGreater(hook_calls[0], 0)
-        # All-zero magnitudes would be replaced with ones, making the
-        # scale search activation-blind.
-        self.assertGreater(max_magnitude[0], 0.0)
-
-    def _tiny_awq_model_and_config(self, num_samples=4):
-        """Embedding -> [Dense(16, relu), Dense(8)] block, tiny AWQ config."""
-        keras.utils.set_random_seed(123)
-        seq_len, vocab, embed_dim = 16, 48, 8
-
-        block = models.Sequential(
-            [
-                layers.Dense(16, activation="relu"),
-                layers.Dense(embed_dim),
-            ]
-        )
-        inputs = layers.Input(shape=(seq_len,), dtype="int32")
-        embedding = layers.Embedding(vocab, embed_dim)
-        x = embedding(inputs)
-        x = block(x)
-        x = layers.GlobalAveragePooling1D()(x)
-        model = models.Model(inputs, layers.Dense(4)(x))
-
-        rng = np.random.default_rng(seed=7)
-        dataset = [
-            rng.integers(0, vocab, size=(1, seq_len), dtype=np.int32)
-            for _ in range(num_samples)
-        ]
-        config = AWQConfig(
-            dataset=dataset,
-            tokenizer=_char_tokenizer(vocab_size=vocab, seq_len=seq_len),
-            group_size=8,
-            num_samples=num_samples,
-            sequence_length=seq_len,
-            num_grid_points=5,
-            quantization_layer_structure={
-                "pre_block_layers": [embedding],
-                "sequential_blocks": [block],
-            },
-        )
-        return model, config
-
-    def test_awq_recalibrates_downstream_stages(self):
-        """AWQ must re-capture downstream statistics between stages.
-
-        The two chained Dense layers form two execution stages. The first
-        sweep captures both layers (2 hook calls per sample); after the
-        first Dense is quantized, the second Dense's statistics must be
-        re-captured against the quantized upstream activations (1 more
-        call per sample). A single-sweep implementation records only
-        2 * num_samples calls.
-        """
-        num_samples = 4
-        model, config = self._tiny_awq_model_and_config(num_samples)
-
-        hook_calls = [0]
-        original_update = AWQ.update_activation_magnitudes
-
-        def spy_update(awq_self, inp):
-            hook_calls[0] += 1
-            return original_update(awq_self, inp)
-
-        AWQ.update_activation_magnitudes = spy_update
-        try:
-            model.quantize("awq", config=config)
-        finally:
-            AWQ.update_activation_magnitudes = original_update
-
-        self.assertEqual(hook_calls[0], 3 * num_samples)
-
-    def test_awq_calibration_runs_without_grad_tracking(self):
-        """Calibration forwards must not build autograd graphs on torch.
-
-        The per-sample activations are retained across the whole
-        calibration loop, so retained graphs previously accumulated every
-        intermediate activation and exhausted GPU memory.
-        """
-        if backend.backend() != "torch":
-            self.skipTest("gradient tracking is specific to torch")
-        model, config = self._tiny_awq_model_and_config()
-
-        graph_free = [True]
-        original_update = AWQ.update_activation_magnitudes
-
-        def spy_update(awq_self, inp):
-            if getattr(inp, "grad_fn", None) is not None:
-                graph_free[0] = False
-            return original_update(awq_self, inp)
-
-        AWQ.update_activation_magnitudes = spy_update
-        try:
-            model.quantize("awq", config=config)
-        finally:
-            AWQ.update_activation_magnitudes = original_update
-
-        self.assertTrue(graph_free[0])

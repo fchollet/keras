@@ -6,12 +6,8 @@ activation magnitudes, then applies those scales before quantization.
 Reference: https://arxiv.org/abs/2306.00978
 """
 
-import types
-
 from keras.src import ops
-from keras.src.layers import Dense
-from keras.src.layers import EinsumDense
-from keras.src.quantizers import strategy_registry
+from keras.src.quantizers.calibrator import Calibrator
 from keras.src.quantizers.quantizers import compute_quantization_parameters
 from keras.src.quantizers.quantizers import dequantize_with_sz_map
 from keras.src.quantizers.quantizers import dequantize_with_zero_point
@@ -407,170 +403,67 @@ def awq_quantize_matrix(
     return quantized, scale_q, zero_q, awq_scales, g_idx
 
 
-class AWQ:
-    """AWQ quantizer for a single layer.
+class AWQCalibrator(Calibrator):
+    """AWQ calibrator for one layer: the activation magnitudes of its inputs.
 
-    This class accumulates activation statistics during calibration and
-    performs AWQ quantization on layer weights.
-
-    The AWQ algorithm works by:
-    1. Collecting per-channel mean activation magnitudes
-    2. Using activation magnitudes to determine weight saliency
-    3. Finding optimal per-channel scales via grid search
-    4. (Optional) Searching per-group weight clipping bounds
-    5. Applying scales before quantization to protect salient weights
+    It accumulates the per-channel mean of `|x|` and, for the clipping
+    search, a bounded sample of input rows.
 
     Args:
-        layer: The layer to quantize (Dense or EinsumDense).
-        config: AWQConfig instance with quantization parameters.
+        layer: A layer with a projection geometry (`Dense`, `EinsumDense`)
+            that supports the `awq` mode.
+        config: `AWQConfig` instance with quantization parameters.
     """
 
-    def __init__(self, layer, config=None):
-        from keras.src.quantizers.awq_config import AWQConfig
+    mode = "awq"
 
-        self.original_layer = layer
-        self.config = config or AWQConfig(dataset=None, tokenizer=None)
-        self.num_samples = 0
-
-        # Handle Dense and EinsumDense layers
-        if isinstance(layer, Dense) or (
-            isinstance(layer, EinsumDense) and layer.kernel.ndim == 2
-        ):
-            self.kernel_shape = layer.kernel.shape
-            self.rows = self.kernel_shape[0]  # in_features
-            self.columns = self.kernel_shape[1]  # out_features
-            self.layer = layer
-        elif isinstance(layer, EinsumDense) and layer.kernel.ndim == 3:
-            # Handle 3D EinsumDense layers (typically from attention blocks)
-            self.kernel_shape = layer.kernel.shape
-            shape = list(self.kernel_shape)
-            d_model_dim_index = shape.index(max(shape))
-
-            if d_model_dim_index == 0:  # QKV projection case
-                in_features, heads, head_dim = shape
-                self.rows = in_features
-                self.columns = heads * head_dim
-            elif d_model_dim_index in [1, 2]:  # Attention Output case
-                heads, head_dim, out_features = shape
-                self.rows = heads * head_dim
-                self.columns = out_features
-            else:
-                raise ValueError(
-                    f"Cannot determine dimensions for EinsumDense kernel "
-                    f"shape {shape}"
-                )
-
-            # Create a temporary object that holds a reshaped 2D version
-            self.layer = types.SimpleNamespace(
-                kernel=ops.reshape(layer.kernel, (self.rows, self.columns)),
-            )
-        else:
-            raise TypeError(f"Unsupported layer type for AWQ: {type(layer)}")
-
-        # Initialize activation magnitude accumulator (running per-channel
-        # MEAN of |x|, as in the reference AWQ implementations).
+    def __init__(self, layer, config):
+        super().__init__(layer, config)
+        # Running per-channel mean of |x|, as in the reference AWQ
+        # implementations.
         self.activation_magnitudes = ops.zeros((self.rows,), dtype="float32")
-
         # Bounded stash of raw activation rows for the clipping search.
         self._clip_samples = []
         self._clip_sample_rows = 0
 
-    def update_activation_magnitudes(self, input_batch):
-        """Update per-channel activation magnitude statistics.
-
-        This tracks the running per-channel MEAN of the absolute activation
-        value across all calibration batches (matching llm-awq / AutoAWQ),
-        accumulated with a numerically stable batch-count-weighted update. It
-        also stashes a bounded sample of raw activation rows that the clipping
-        search reuses.
-
-        Args:
-            input_batch: Input activations tensor [batch, ..., in_features].
-        """
-        if input_batch is None:
-            raise ValueError("Input tensor cannot be None.")
-        if ops.size(input_batch) == 0:
-            raise ValueError("Input tensor cannot be empty.")
-
-        # Flatten to [batch_samples, in_features]
-        if len(input_batch.shape) > 2:
-            input_batch = ops.reshape(input_batch, (-1, input_batch.shape[-1]))
-
-        x = ops.cast(input_batch, "float32")
-        n = int(ops.shape(x)[0])
+    def observe(self, inputs):
+        """Updates the running mean of `|x|` and the clipping sample."""
+        x = self._flatten_inputs(inputs)
+        num_new_samples = int(ops.shape(x)[0])
+        total_samples = self.num_samples + num_new_samples
 
         # Running per-channel mean of |x| via a stable weighted update:
         #   mean <- mean + (batch_mean - mean) * n / (count + n)
         batch_mean = ops.mean(ops.abs(x), axis=0)
-        new_count = self.num_samples + n
         delta = ops.subtract(batch_mean, self.activation_magnitudes)
         self.activation_magnitudes = ops.add(
-            self.activation_magnitudes, ops.multiply(delta, n / new_count)
+            self.activation_magnitudes,
+            ops.multiply(delta, num_new_samples / total_samples),
         )
-        self.num_samples = new_count
+        self.num_samples = total_samples
 
-        # Stash a bounded sample of raw activations for the clipping search.
         if (
-            getattr(self.config, "apply_clip", False)
+            self.config.apply_clip
             and self._clip_sample_rows < MAX_CLIP_SAMPLE_ROWS
         ):
-            take = min(n, MAX_CLIP_SAMPLE_ROWS - self._clip_sample_rows)
-            self._clip_samples.append(x[:take])
+            take = min(
+                num_new_samples, MAX_CLIP_SAMPLE_ROWS - self._clip_sample_rows
+            )
+            # A copy: on torch a slice is a view that would keep the whole
+            # batch alive.
+            self._clip_samples.append(ops.copy(x[:take]))
             self._clip_sample_rows += take
 
-    def quantize_layer(self):
-        """Perform AWQ quantization on the layer.
-
-        This method:
-        1. Runs the AWQ grid search to find optimal scales
-        2. Quantizes the layer weights
-        3. Updates the layer's quantized variables
-        """
-        from keras.src import quantizers
-
-        weights_matrix = ops.transpose(self.layer.kernel)
-
-        # Assemble the stashed activation sample for the clipping search.
-        apply_clip = bool(getattr(self.config, "apply_clip", False))
+    def _solve(self, weights):
         activation_sample = None
-        if apply_clip and self._clip_samples:
+        if self._clip_samples:
             activation_sample = ops.concatenate(self._clip_samples, axis=0)
-
-        # Perform AWQ quantization
-        quantized, scale, zero, awq_scales, g_idx = awq_quantize_matrix(
-            weights_matrix,
+        codes, scale, zero, awq_scales, g_idx = awq_quantize_matrix(
+            weights,
             self.activation_magnitudes,
             num_grid_points=self.config.num_grid_points,
             group_size=self.config.group_size,
-            apply_clip=apply_clip and activation_sample is not None,
+            apply_clip=activation_sample is not None,
             activation_sample=activation_sample,
         )
-
-        # Cast to uint8 for storage. The algorithm works on `[out, in]`; the
-        # layer stores the kernel's own `[in, out]` orientation with the
-        # group parameters as `[n_groups, out]`, so the forward pass never
-        # transposes.
-        quantized = ops.transpose(ops.cast(quantized, "uint8"))
-        scale = ops.transpose(scale)
-        zero = ops.transpose(zero)
-
-        # Pack to 4-bit along the output axis.
-        quantized_packed, _, _ = quantizers.pack_int4(
-            quantized, axis=-1, dtype="uint8"
-        )
-
-        strategy_registry.get_strategy("awq").write_back(
-            self.original_layer,
-            quantized_packed,
-            scale,
-            zero,
-            g_idx,
-            input_scales=awq_scales,
-        )
-
-    def free(self):
-        """Free memory used by the quantizer."""
-        del self.activation_magnitudes
-        del self.layer
-        self._clip_samples = []
-        self._clip_sample_rows = 0
+        return codes, scale, zero, g_idx, awq_scales

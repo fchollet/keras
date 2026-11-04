@@ -1,10 +1,10 @@
 import numpy as np
 
-from keras.src import backend
 from keras.src import tree
 from keras.src.backend import config
-from keras.src.backend import standardize_dtype
 from keras.src.backend.common import dtypes
+from keras.src.backend.common import is_float_dtype
+from keras.src.backend.common import standardize_dtype
 from keras.src.backend.common.backend_utils import canonicalize_axis
 from keras.src.backend.common.backend_utils import standardize_axis_for_numpy
 from keras.src.backend.numpy.ops.core import convert_to_tensor
@@ -1166,7 +1166,7 @@ def nanpercentile(x, q, axis=None, method="linear", keepdims=False):
         x = x.astype(config.floatx())
     if standardize_dtype(x.dtype) == "bool":
         x = x.astype(config.floatx())
-    if not backend.is_float_dtype(x.dtype):
+    if not is_float_dtype(x.dtype):
         dtype = config.floatx()
     else:
         dtype = x.dtype

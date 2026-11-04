@@ -4,6 +4,9 @@ import operator
 import re
 import warnings
 
+from keras.src import tree
+from keras.src.backend.common.keras_tensor import KerasTensor
+
 
 def _convert_conv_transpose_padding_args_from_keras_to_jax(
     kernel_size, stride, dilation_rate, padding, output_padding
@@ -723,3 +726,17 @@ def standardize_argnums(argnums, num_args):
             f"`argnums` must not repeat a position. Received: argnums={argnums}"
         )
     return positions
+
+
+def empty_scan_ys_spec(compute_output_spec, f, init, xs):
+    """Traces one step of `f` for the `ys` specs of a zero length `scan`."""
+    init_spec = tree.map_structure(
+        lambda x: KerasTensor(x.shape, x.dtype), init
+    )
+    xs_spec = None
+    if xs is not None:
+        xs_spec = tree.map_structure(
+            lambda x: KerasTensor(x.shape[1:], x.dtype), xs
+        )
+    _, ys_spec = compute_output_spec(f, init_spec, xs_spec)
+    return ys_spec

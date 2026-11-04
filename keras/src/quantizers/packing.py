@@ -9,9 +9,9 @@ length back to trim the padding.
 
 import numpy as np
 
-from keras.src import backend
 from keras.src import ops
 from keras.src.api_export import keras_export
+from keras.src.backend.common import standardize_dtype
 from keras.src.backend.common.backend_utils import canonicalize_axis
 
 
@@ -74,10 +74,10 @@ def _check_pack_dtype(dtype, arr):
         raise ValueError(
             f"Expected dtype to be 'int8' or 'uint8', but got '{dtype}'."
         )
-    if backend.standardize_dtype(arr.dtype) != dtype:
+    if standardize_dtype(arr.dtype) != dtype:
         raise TypeError(
             f"Expected {dtype} tensor for packing, got "
-            f"{backend.standardize_dtype(arr.dtype)}."
+            f"{standardize_dtype(arr.dtype)}."
         )
 
 
@@ -86,7 +86,7 @@ def _check_unpack_dtype(dtype, packed):
         raise ValueError(
             f"Expected dtype to be 'int8' or 'uint8', but got '{dtype}'."
         )
-    if backend.standardize_dtype(packed.dtype) not in ("int8", "uint8"):
+    if standardize_dtype(packed.dtype) not in ("int8", "uint8"):
         raise TypeError(
             f"Expected int8 or uint8 tensor for unpacking, got {packed.dtype}"
         )
@@ -120,7 +120,7 @@ def _bitfield_decode(bits, dtype):
             field = ops.bitwise_and(ops.right_shift(x, i * bits), mask)
             if dtype == "int8":
                 # Branchless sign extension: (x ^ half) - half.
-                h = ops.cast(half, backend.standardize_dtype(field.dtype))
+                h = ops.cast(half, standardize_dtype(field.dtype))
                 field = ops.subtract(ops.bitwise_xor(field, h), h)
             fields.append(ops.cast(field, dtype))
         return fields
@@ -409,7 +409,7 @@ def unpack_ternary(packed, orig_len, axis=0):
     array([[ 1, -1,  0,  1,  1, -1]], dtype=int8)
     ```
     """
-    packed_dtype = backend.standardize_dtype(packed.dtype)
+    packed_dtype = standardize_dtype(packed.dtype)
     if packed_dtype not in ("uint8", "int8"):
         raise TypeError(
             "`unpack_ternary` expects a `uint8` or `int8` tensor produced by "

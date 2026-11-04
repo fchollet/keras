@@ -13,6 +13,7 @@ from keras.src import tree
 from keras.src.backend.common import KerasVariable
 from keras.src.backend.common import global_state
 from keras.src.backend.common import standardize_dtype
+from keras.src.backend.common.backend_utils import empty_scan_ys_spec
 from keras.src.backend.common.backend_utils import slice_along_axis
 from keras.src.backend.common.backend_utils import standardize_argnums
 from keras.src.backend.common.dtypes import result_type
@@ -88,6 +89,14 @@ TORCH_DTYPES = {
     "complex32": torch.complex32,
     "complex64": torch.complex64,
     "complex128": torch.complex128,
+}
+
+# TODO: Remove the MPS dtype downcasts if PyTorch adds support for these
+# dtypes on MPS (Metal currently has no double-precision support, see
+# https://github.com/pytorch/pytorch/issues/79019).
+MPS_UNSUPPORTED_DTYPES = {
+    "float64": "float32",
+    "complex128": "complex64",
 }
 
 
@@ -184,26 +193,19 @@ class KerasDTensorPromotionMode(torch.utils._python_dispatch.TorchDispatchMode):
 
 class Variable(KerasVariable):
     def _initialize_distributed(self, initializer):
+        from keras.src.backend.torch import distribution_lib
+        from keras.src.distribution.distribution_lib import TensorLayout
         from keras.src.distribution.distribution_lib import distribution
 
-        dist = distribution()
-        if dist is None:
-            return None
-
-        from keras.src.backend.torch import distribution_lib
-
-        if self._layout is None:
-            self._layout = dist.get_variable_layout(self)
+        if self._layout is None and distribution() is not None:
+            self._layout = distribution().get_variable_layout(self)
 
         if self._layout is None:
             return None
-
-        from keras.src.distribution.distribution_lib import TensorLayout
 
         if isinstance(self._layout, TensorLayout):
             if all(axis is None for axis in self._layout.axes):
                 return None
-            self._layout = self._layout.backend_layout
 
         if callable(initializer):
             value = initializer(self._shape, dtype=self._dtype)
@@ -218,8 +220,13 @@ class Variable(KerasVariable):
             value = value.detach()
 
         if isinstance(value, torch.Tensor):
-            if value.device.type != self._layout.device_mesh.device_type:
-                value = value.to(self._layout.device_mesh.device_type)
+            if isinstance(self._layout, TensorLayout):
+                backend_mesh = self._layout.device_mesh.backend_mesh
+            else:
+                backend_mesh = self._layout.device_mesh
+
+            if value.device.type != backend_mesh.device_type:
+                value = value.to(backend_mesh.device_type)
 
         dtensor = distribution_lib.distribute_tensor(value, self._layout)
 
@@ -288,6 +295,16 @@ class Variable(KerasVariable):
             return value.astype(dtype)
         return value
 
+    def __repr__(self):
+        if isinstance(getattr(self, "_value", None), DTensor):
+            # Gathering a sharded value is a collective, and a repr can run
+            # on a single process (a log line, a debugger, an error message).
+            return (
+                f"<Variable path={self.path}, shape={self.shape}, "
+                f"dtype={self.dtype}>"
+            )
+        return super().__repr__()
+
     @property
     def value(self):
         # We cannot chain super() here because it will fail TorchDynamo. The
@@ -345,16 +362,30 @@ def convert_to_tensor(x, dtype=None, sparse=None, ragged=None):
         raise ValueError("`sparse=True` is not supported with torch backend")
     if ragged:
         raise ValueError("`ragged=True` is not supported with torch backend")
+    inferred_dtype = dtype is None
     if isinstance(x, Variable) or is_tensor(x):
         if isinstance(x, Variable):
             x = x.value
         device = get_device()
         if x.is_meta:
-            x = torch.empty_like(x, device=device)
-        else:
+            if dtype is None and "mps" in str(device):
+                dtype = MPS_UNSUPPORTED_DTYPES.get(standardize_dtype(x.dtype))
+            x = torch.empty_like(
+                x,
+                dtype=None if dtype is None else to_torch_dtype(dtype),
+                device=device,
+            )
+        elif dtype is None and "mps" in str(device):
+            x_dtype = standardize_dtype(x.dtype)
+            fallback_dtype = MPS_UNSUPPORTED_DTYPES.get(x_dtype)
+            if fallback_dtype is not None:
+                x = x.to(device=device, dtype=to_torch_dtype(fallback_dtype))
+            else:
+                x = x.to(device)
+        elif dtype is None:
             x = x.to(device)
-        if dtype is not None:
-            x = x.to(to_torch_dtype(dtype))
+        else:
+            x = x.to(device=device, dtype=to_torch_dtype(dtype))
         return x
     if isinstance(x, (bool, int, float, complex)):
         if dtype is not None:
@@ -404,6 +435,8 @@ def convert_to_tensor(x, dtype=None, sparse=None, ragged=None):
         dtype = result_type(
             *[getattr(item, "dtype", type(item)) for item in tree.flatten(x)]
         )
+    if inferred_dtype and "mps" in str(get_device()):
+        dtype = MPS_UNSUPPORTED_DTYPES.get(standardize_dtype(dtype), dtype)
     dtype = to_torch_dtype(dtype)
     return torch.as_tensor(x, dtype=dtype, device=get_device())
 
@@ -413,10 +446,12 @@ def convert_to_numpy(x):
         if isinstance(x, Variable):
             x = x.value
         if is_tensor(x):
-            if isinstance(x, DTensor):
-                x = x.to_local()
             if x.requires_grad:
                 x = x.detach()
+            if isinstance(x, DTensor):
+                # Gather the global value. This is a collective when `x` is
+                # sharded across processes, so every process must convert it.
+                x = x.full_tensor()
             # Tensor has to be moved to CPU before converting to numpy.
             if x.device != torch.device("cpu"):
                 x = x.cpu()
@@ -604,6 +639,22 @@ def scan(f, init, xs=None, length=None, reverse=False, unroll=1):
     init_flat = [convert_to_tensor(init) for init in init_flat]
     init = pack_output(init_flat)
     dummy_y = [torch.zeros_like(init) for init in init_flat]
+
+    if n == 0:
+        # Nothing to stack, so trace `f` once for the shapes of `ys`.
+        packed_xs = pack_input(xs_flat) if len(xs_flat) > 0 else None
+        ys_spec = empty_scan_ys_spec(compute_output_spec, f, init, packed_xs)
+        if ys_spec is None:
+            ys_spec = dummy_y
+        stacked_y = tree.map_structure(
+            lambda y: torch.zeros(
+                (0, *y.shape),
+                dtype=to_torch_dtype(y.dtype),
+                device=get_device(),
+            ),
+            ys_spec,
+        )
+        return init, stacked_y
 
     carry = init
     ys = []
@@ -1000,11 +1051,11 @@ class CustomGradientFunction(torch.autograd.Function):
         """
         ctx.forward_fn = forward_fn
         ctx.save_for_backward(*args)
-        try:
-            output, ctx.grad_fn = forward_fn(*args, **kwargs)
-        except:
-            output = forward_fn(*args, **kwargs)
-            ctx.grad_fn = lambda *args, **kwargs: torch.full((), float("nan"))
+        result = forward_fn(*args, **kwargs)
+        if isinstance(result, (list, tuple)) and len(result) == 2:
+            output, ctx.grad_fn = result
+        else:
+            output, ctx.grad_fn = result, None
         return output
 
     @staticmethod
@@ -1022,7 +1073,13 @@ class CustomGradientFunction(torch.autograd.Function):
         grads = grad_fn(*args, upstream=grad_output)
         if not isinstance(grads, tuple):
             grads = (grads,)
-        return (None,) + grads
+        # Keras ops compute the gradients on `get_device()`, but autograd
+        # needs each gradient on the device of its input.
+        grads = list(grads)
+        for i, (grad, x) in enumerate(zip(grads, args)):
+            if isinstance(grad, torch.Tensor) and x is not None:
+                grads[i] = grad.to(x.device)
+        return (None,) + tuple(grads)
 
 
 def grad(f, argnums=0):

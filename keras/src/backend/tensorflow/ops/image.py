@@ -6,6 +6,9 @@ import numpy as np
 import tensorflow as tf
 
 from keras.src import backend
+from keras.src.backend.common import is_float_dtype
+from keras.src.backend.common import is_int_dtype
+from keras.src.backend.common import standardize_dtype
 from keras.src.backend.tensorflow.ops.core import convert_to_tensor
 from keras.src.backend.tensorflow.ops.numpy import moveaxis
 from keras.src.random.seed_generator import draw_seed
@@ -89,10 +92,10 @@ def rgb_to_hsv(images, data_format=None):
             "or rank 4 (batch of images). Received input with shape: "
             f"images.shape={images.shape}"
         )
-    if not backend.is_float_dtype(dtype):
+    if not is_float_dtype(dtype):
         raise ValueError(
             "Invalid images dtype: expected float dtype. "
-            f"Received: images.dtype={backend.standardize_dtype(dtype)}"
+            f"Received: images.dtype={standardize_dtype(dtype)}"
         )
     if data_format == "channels_first":
         if len(images.shape) == 4:
@@ -118,10 +121,10 @@ def hsv_to_rgb(images, data_format=None):
             "or rank 4 (batch of images). Received input with shape: "
             f"images.shape={images.shape}"
         )
-    if not backend.is_float_dtype(dtype):
+    if not is_float_dtype(dtype):
         raise ValueError(
             "Invalid images dtype: expected float dtype. "
-            f"Received: images.dtype={backend.standardize_dtype(dtype)}"
+            f"Received: images.dtype={standardize_dtype(dtype)}"
         )
     if data_format == "channels_first":
         if len(images.shape) == 4:
@@ -775,7 +778,7 @@ def gaussian_blur(
 
     data_format = backend.standardize_data_format(data_format)
     images = convert_to_tensor(images)
-    dtype = backend.standardize_dtype(images.dtype)
+    dtype = standardize_dtype(images.dtype)
     kernel_size = convert_to_tensor(kernel_size, dtype=dtype)
     sigma = convert_to_tensor(sigma, dtype=dtype)
 
@@ -1028,7 +1031,7 @@ def _scale_and_translate(
     input_shape = tf.shape(x)
     if len(spatial_dims) == 0:
         return x
-    if backend.is_int_dtype(x.dtype):
+    if is_int_dtype(x.dtype):
         output = tf.cast(x, tf.float32)
         use_rounding = True
     else:
