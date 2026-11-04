@@ -84,13 +84,13 @@ def lstsq(a, b, rcond=None):
     # large errors on near-rank-deficient inputs. Pin the SVD-based
     # `gelsd` driver when an explicit `rcond` is supplied so the result
     # matches numpy's `linalg.lstsq` semantics. CUDA only supports the
-    # `gels` driver, which has no rcond cutoff, so fall back to SVD via
-    # `pinv` to match numpy semantics there.
+    # `gels` driver, which assumes a full-rank input and returns NaN/inf
+    # otherwise, so always fall back to SVD via `pinv` there.
+    if a.device.type == "cuda":
+        return torch.linalg.pinv(a, rtol=rcond) @ b
     if rcond is not None:
-        if a.device.type == "cuda":
-            return torch.linalg.pinv(a, rtol=rcond) @ b
         return torch.linalg.lstsq(a, b, rcond=rcond, driver="gelsd")[0]
-    return torch.linalg.lstsq(a, b, rcond=rcond)[0]
+    return torch.linalg.lstsq(a, b)[0]
 
 
 def matrix_rank(x, tol=None):
