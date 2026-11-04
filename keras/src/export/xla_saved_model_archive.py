@@ -283,7 +283,6 @@ class XLASavedModelArchive:
             "input_signature": serving_input_signature,
             "batch_options": kwargs.pop("batch_options", None),
             "warmup_examples": kwargs.pop("warmup_examples", None),
-            "positional_signature": spec_structure,
             # Layer/model `fn` is a bound method of, if any (see
             # `_check_endpoint_owners_are_tracked`).
             "owner": getattr(fn, "__self__", None),
@@ -613,11 +612,13 @@ def _to_serving_outputs(outputs):
 
 
 def _symbolic_shape(shape, polymorphic_shape):
-    """Replaces `None` dims of `shape` with the symbol in `polymorphic_shape`.
+    """Returns the serving shape for `shape` given its polymorphic shape.
 
-    `jax.ShapeDtypeStruct` accepts symbolic dimension names as strings, which
-    is how `xla_saved_model` expects dynamic dimensions in the serving
-    signature. Known dims are kept as ints.
+    `jax.export` traces the endpoint with `polymorphic_shape` (it overrides
+    `shape` entirely), so the serving signature is derived from it too:
+    integer dimensions are kept as ints and symbolic ones as strings, which
+    is how `xla_saved_model` expects dynamic dimensions in
+    `jax.ShapeDtypeStruct`. `shape` is only used to validate the rank.
     """
     symbols = [
         s.strip() for s in polymorphic_shape.strip().strip("()").split(",")
@@ -628,15 +629,7 @@ def _symbolic_shape(shape, polymorphic_shape):
             f"The polymorphic shape '{polymorphic_shape}' does not match the "
             f"rank of the input shape {tuple(shape)}."
         )
-    result = []
-    for dim, symbol in zip(shape, symbols):
-        if dim is not None:
-            result.append(int(dim))
-        elif symbol.isdigit():
-            result.append(int(symbol))
-        else:
-            result.append(symbol)
-    return tuple(result)
+    return tuple(int(s) if s.isdigit() else s for s in symbols)
 
 
 def _default_platform():
@@ -648,9 +641,7 @@ def _default_platform():
 
 def _print_signature(name, endpoint):
     lines = [f"* Endpoint '{name}'"]
-    for input_name, spec in sorted(
-        tree.flatten_with_path(endpoint["input_signature"])
-    ):
+    for input_name, spec in tree.flatten_with_path(endpoint["input_signature"]):
         path = "/".join(str(p) for p in input_name)
         lines.append(
             f"    {path}: shape={tuple(spec.shape)}, dtype={spec.dtype}"
