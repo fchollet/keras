@@ -2482,6 +2482,13 @@ class NumpyOneInputOpsDynamicShapeTest(testing.TestCase):
         self.assertEqual(knp.split(x, [1, 3], axis=1)[0].shape, (None, 1, 3))
         self.assertEqual(knp.split(x, [1, 3], axis=1)[1].shape, (None, 2, 3))
         self.assertEqual(knp.split(x, [1, 3], axis=1)[2].shape, (None, 0, 3))
+        outputs = knp.split(x, [-2, 10], axis=1)
+        self.assertEqual(
+            [o.shape for o in outputs],
+            [(None, 1, 3), (None, 2, 3), (None, 0, 3)],
+        )
+        outputs = knp.split(x, [-2])
+        self.assertEqual([o.shape for o in outputs], [(None, 3, 3)] * 2)
 
     def test_sqrt(self):
         x = KerasTensor((None, 3))
@@ -3320,6 +3327,8 @@ class NumpyOneInputOpsStaticShapeTest(testing.TestCase):
         self.assertEqual(knp.split(x, [1, 3], axis=1)[0].shape, (2, 1))
         self.assertEqual(knp.split(x, [1, 3], axis=1)[1].shape, (2, 2))
         self.assertEqual(knp.split(x, [1, 3], axis=1)[2].shape, (2, 0))
+        outputs = knp.split(x, [-2, 10], axis=1)
+        self.assertEqual([o.shape for o in outputs], [(2, 1), (2, 2), (2, 0)])
 
         with self.assertRaises(ValueError):
             knp.split(x, 2, axis=1)
@@ -7540,6 +7549,15 @@ class NumpyOneInputOpsCorrectnessTest(testing.TestCase):
         ):
             self.assertAllClose(split_knp, split_np)
 
+        # test negative and out-of-range indices
+        x = np.arange(6.0)
+        for indices in ([-2], [2, 10], [-10], [2, -1]):
+            outputs = knp.split(x, indices)
+            expected = np.split(x, indices)
+            self.assertEqual(len(outputs), len(expected))
+            for split_knp, split_np in zip(outputs, expected):
+                self.assertAllClose(split_knp, split_np)
+
     @pytest.mark.skipif(
         backend.backend() != "tensorflow",
         reason="Only test tensorflow backend",
@@ -7560,6 +7578,11 @@ class NumpyOneInputOpsCorrectnessTest(testing.TestCase):
             fn(x, indices, axis=1),
             np.split(x_np, indices_np, axis=1),
         )
+        outputs = fn(x, knp.array([-2, 10]), axis=1)
+        expected = np.split(x_np, [-2, 10], axis=1)
+        self.assertEqual(len(outputs), len(expected))
+        for split_knp, split_np in zip(outputs, expected):
+            self.assertAllClose(split_knp, split_np)
 
     @parameterized.named_parameters(named_product(BACKEND_AGNOSTIC_OPS))
     def test_hsplit(self, backend_agnostic_ops):

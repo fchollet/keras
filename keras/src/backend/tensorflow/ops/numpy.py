@@ -3066,7 +3066,6 @@ def split(x, indices_or_sections, axis=0):
     if not isinstance(indices_or_sections, int):
         # `tf.split` requires `num_or_size_splits`, so we need to convert
         # `indices_or_sections` to the appropriate format.
-        total_size = x.shape[axis]
         indices_or_sections = convert_to_tensor(indices_or_sections)
         total_size = shape_op(x)[axis]
         # Like NumPy, wrap negative indices and clip them to the axis length.
