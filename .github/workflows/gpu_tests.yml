@@ -122,8 +122,10 @@ jobs:
       # only when pytest ran: a failed test still gives valid durations, but a
       # failed install would upload the committed file as if it were fresh.
       - name: Upload test durations
+        # TEMPORARY: upload on every event so this PR's run can seed the
+        # committed files. Restored to push-only in the seeding commit.
         if: |
-          always() && github.event_name == 'push' &&
+          always() &&
           (steps.pytest.outcome == 'success' || steps.pytest.outcome == 'failure')
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
