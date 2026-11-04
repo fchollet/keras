@@ -3096,11 +3096,29 @@ class NNOpsCorrectnessTest(testing.TestCase):
             )
 
         if flash_attention:
-            if backend.backend() in ("tensorflow", "numpy"):
+            if backend.backend() == "numpy":
                 self.skipTest(
-                    "Flash attention is not supported in tensorflow and numpy "
-                    "backends."
+                    "Flash attention is not supported in numpy backend."
                 )
+            elif backend.backend() == "tensorflow":
+                import tensorflow as tf
+
+                if not hasattr(tf.nn, "flash_attention"):
+                    self.skipTest(
+                        "This TensorFlow build doesn't have "
+                        "`tf.nn.flash_attention`."
+                    )
+                if bias is not None or mask is not None:
+                    with self.assertRaisesRegex(ValueError, "not supported"):
+                        knn.dot_product_attention(
+                            query,
+                            key,
+                            value,
+                            bias=bias,
+                            mask=mask,
+                            flash_attention=True,
+                        )
+                    return
             elif backend.backend() == "torch":
                 import torch
 

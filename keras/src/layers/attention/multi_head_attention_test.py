@@ -21,6 +21,7 @@ from keras.src.backend.common import set_keras_mask
 from keras.src.backend.config import disable_flash_attention
 from keras.src.backend.config import enable_flash_attention
 from keras.src.backend.config import is_flash_attention_enabled
+from keras.src.testing.test_utils import named_product
 
 
 class MultiHeadAttentionTest(testing.TestCase):
@@ -717,6 +718,97 @@ class MultiHeadAttentionTest(testing.TestCase):
         restored = layers.MultiHeadAttention.from_config(config)
         self.assertEqual(restored._sliding_window, 5)
 
+    @pytest.mark.skipif(
+        backend.backend() != "tensorflow",
+        reason="Only the TensorFlow backend has dropout in flash attention.",
+    )
+    @parameterized.named_parameters(("causal", True), ("not_causal", False))
+    def test_flash_attention_dropout_tensorflow(self, use_causal_mask):
+        import tensorflow as tf
+
+        if not hasattr(tf.nn, "flash_attention"):
+            self.skipTest("This TensorFlow build has no tf.nn.flash_attention.")
+        query = np.random.normal(size=(2, 16, 32)).astype("float32")
+        value = np.random.normal(size=(2, 16, 32)).astype("float32")
+
+        def make_layer(dropout, seed=None):
+            return layers.MultiHeadAttention(
+                num_heads=4,
+                key_dim=16,
+                flash_attention=True,
+                dropout=dropout,
+                seed=seed,
+            )
+
+        layer = make_layer(0.3, seed=1)
+        no_dropout = make_layer(0.0)
+        layer(query, value)
+        no_dropout(query, value)
+        no_dropout.set_weights(layer.get_weights())
+
+        def run(lyr, training):
+            return ops.convert_to_numpy(
+                lyr(
+                    query,
+                    value,
+                    use_causal_mask=use_causal_mask,
+                    training=training,
+                )
+            )
+
+        # Inference: no dropout.
+        self.assertAllClose(run(layer, False), run(no_dropout, False))
+        # Training: dropout inside the kernel, with a new mask every call.
+        first = run(layer, True)
+        second = run(layer, True)
+        self.assertNotAllClose(first, run(no_dropout, False))
+        self.assertNotAllClose(first, second)
+        # The same `seed` reproduces the same sequence of masks.
+        same_seed = make_layer(0.3, seed=1)
+        same_seed(query, value)
+        same_seed.set_weights(layer.get_weights())
+        self.assertAllClose(run(same_seed, True), first)
+        # Gradients flow through the dropout path.
+        with tf.GradientTape() as tape:
+            loss = tf.reduce_sum(
+                layer(
+                    query, value, use_causal_mask=use_causal_mask, training=True
+                )
+                ** 2
+            )
+        grads = tape.gradient(loss, layer.trainable_variables)
+        self.assertTrue(
+            all(np.isfinite(ops.convert_to_numpy(g)).all() for g in grads)
+        )
+
+    @parameterized.named_parameters(
+        ("true", True), ("false", False), ("none", None)
+    )
+    def test_flash_attention_serialization(self, flash_attention):
+        # The argument round-trips as given, so a saved
+        # `flash_attention=True` still uses flash attention after loading,
+        # and `None` still follows the global setting.
+        layer = layers.MultiHeadAttention(
+            num_heads=2, key_dim=8, flash_attention=flash_attention
+        )
+        config = layer.get_config()
+        self.assertIs(config["flash_attention"], flash_attention)
+        restored = layers.MultiHeadAttention.from_config(config)
+        self.assertEqual(restored._flash_attention, layer._flash_attention)
+        self.assertIs(restored.get_config()["flash_attention"], flash_attention)
+        restored = saving.deserialize_keras_object(
+            saving.serialize_keras_object(layer)
+        )
+        self.assertEqual(restored._flash_attention, layer._flash_attention)
+
+    def test_flash_attention_config_missing(self):
+        # Configs saved before `flash_attention` was serialized still load,
+        # following the global setting.
+        config = layers.MultiHeadAttention(num_heads=2, key_dim=8).get_config()
+        del config["flash_attention"]
+        restored = layers.MultiHeadAttention.from_config(config)
+        self.assertFalse(restored._flash_attention)
+
     @parameterized.named_parameters(
         ("disable_flash_attention", False), ("enable_flash_attention", True)
     )
@@ -943,20 +1035,18 @@ class MultiHeadAttentionTest(testing.TestCase):
         self.assertDType(layer._value_dense._kernel, "int8")
 
     def test_flash_attention_with_errors(self):
-        if backend.backend() in ("numpy", "tensorflow"):
-            pytest.skip(
-                reason=(
-                    "Flash attention is not supported on tensorflow and numpy."
+        if backend.backend() == "numpy":
+            pytest.skip(reason="Flash attention is not supported on numpy.")
+        # Check `flash_attention=True` and `dropout=0.1`. The TensorFlow
+        # backend supports it (see test_flash_attention_dropout_tensorflow).
+        if backend.backend() != "tensorflow":
+            with self.assertRaisesRegex(
+                ValueError,
+                "Dropout is not supported when flash attention is enabled.",
+            ):
+                layer = layers.MultiHeadAttention(
+                    num_heads=2, key_dim=2, flash_attention=True, dropout=0.1
                 )
-            )
-        # Check `flash_attention=True` and `dropout=0.1`
-        with self.assertRaisesRegex(
-            ValueError,
-            "Dropout is not supported when flash attention is enabled.",
-        ):
-            layer = layers.MultiHeadAttention(
-                num_heads=2, key_dim=2, flash_attention=True, dropout=0.1
-            )
 
         # Check `flash_attention=True` and `return_attention_scores=True`
         layer = layers.MultiHeadAttention(
@@ -972,6 +1062,73 @@ class MultiHeadAttentionTest(testing.TestCase):
             " attention scores.",
         ):
             layer(query=query, value=value, return_attention_scores=True)
+
+    @parameterized.named_parameters(
+        named_product(
+            dtype=("float32", "float16", "bfloat16"),
+            use_causal_mask=(False, True),
+        )
+    )
+    @pytest.mark.skipif(
+        backend.backend() != "tensorflow",
+        reason="Tests the TensorFlow flash attention integration.",
+    )
+    def test_flash_attention_tensorflow(self, dtype, use_causal_mask):
+        import tensorflow as tf
+
+        if not hasattr(tf.nn, "flash_attention"):
+            self.skipTest("This TensorFlow build has no tf.nn.flash_attention.")
+        query = np.random.normal(size=(2, 16, 32)).astype("float32")
+        value = np.random.normal(size=(2, 16, 32)).astype("float32")
+
+        def make_layer(flash_attention):
+            return layers.MultiHeadAttention(
+                num_heads=4,
+                key_dim=16,
+                dtype=dtype,
+                flash_attention=flash_attention,
+            )
+
+        reference = make_layer(False)
+        flash = make_layer(True)
+        reference(query, value)
+        flash(query, value)
+        flash.set_weights(reference.get_weights())
+
+        def output_and_grads(layer):
+            q = tf.convert_to_tensor(query)
+            with tf.GradientTape() as tape:
+                tape.watch(q)
+                output = layer(q, value, use_causal_mask=use_causal_mask)
+                loss = tf.reduce_sum(tf.cast(output, "float32") ** 2)
+            grads = tape.gradient(loss, [q] + layer.trainable_variables)
+            return [output] + grads
+
+        # The reference must not use TensorFloat-32 matmuls on Ampere+.
+        tf32 = tf.config.experimental.tensor_float_32_execution_enabled()
+        tf.config.experimental.enable_tensor_float_32_execution(False)
+        self.addCleanup(
+            tf.config.experimental.enable_tensor_float_32_execution, tf32
+        )
+        got_all = [
+            ops.convert_to_numpy(ops.cast(t, "float32"))
+            for t in output_and_grads(flash)
+        ]
+        want_all = [
+            ops.convert_to_numpy(ops.cast(t, "float32"))
+            for t in output_and_grads(reference)
+        ]
+        # Compare against the largest magnitude overall: some gradients (e.g.
+        # of the key bias, which the softmax is invariant to) are ~0, so
+        # their own scale is just rounding noise.
+        scale = max(np.max(np.abs(w)) for w in want_all)
+        tol = 1e-4 if dtype == "float32" else 2e-2
+        for got, want in zip(got_all, want_all):
+            self.assertAllClose(got / scale, want / scale, atol=tol)
+
+        # Arbitrary attention masks aren't supported by flash attention.
+        with self.assertRaisesRegex(ValueError, "not supported"):
+            flash(query, value, attention_mask=np.ones((2, 16, 16), "bool"))
 
     def test_multi_head_attention_output_shape_as_int(self):
         """Test MultiHeadAttention with output_shape as an int."""

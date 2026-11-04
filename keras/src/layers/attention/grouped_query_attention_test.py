@@ -6,6 +6,7 @@ from keras.src import backend
 from keras.src import initializers
 from keras.src import layers
 from keras.src import ops
+from keras.src import saving
 from keras.src import testing
 from keras.src.backend.common import get_keras_mask
 from keras.src.backend.common import set_keras_mask
@@ -561,6 +562,103 @@ class GroupedQueryAttentionTest(testing.TestCase):
         self.assertEqual(config["sliding_window"], 5)
         restored = layers.GroupedQueryAttention.from_config(config)
         self.assertEqual(restored.sliding_window, 5)
+
+    @pytest.mark.skipif(
+        backend.backend() != "tensorflow",
+        reason="Only the TensorFlow backend has dropout in flash attention.",
+    )
+    @parameterized.named_parameters(("causal", True), ("not_causal", False))
+    def test_flash_attention_dropout_tensorflow(self, use_causal_mask):
+        import tensorflow as tf
+
+        if not hasattr(tf.nn, "flash_attention"):
+            self.skipTest("This TensorFlow build has no tf.nn.flash_attention.")
+        query = np.random.normal(size=(2, 16, 32)).astype("float32")
+        value = np.random.normal(size=(2, 16, 32)).astype("float32")
+
+        def make_layer(dropout, seed=None):
+            return layers.GroupedQueryAttention(
+                head_dim=16,
+                num_query_heads=4,
+                num_key_value_heads=2,
+                flash_attention=True,
+                dropout=dropout,
+                seed=seed,
+            )
+
+        layer = make_layer(0.3, seed=1)
+        no_dropout = make_layer(0.0)
+        layer(query, value)
+        no_dropout(query, value)
+        no_dropout.set_weights(layer.get_weights())
+
+        def run(lyr, training):
+            return ops.convert_to_numpy(
+                lyr(
+                    query,
+                    value,
+                    use_causal_mask=use_causal_mask,
+                    training=training,
+                )
+            )
+
+        # Inference: no dropout.
+        self.assertAllClose(run(layer, False), run(no_dropout, False))
+        # Training: dropout inside the kernel, with a new mask every call.
+        first = run(layer, True)
+        second = run(layer, True)
+        self.assertNotAllClose(first, run(no_dropout, False))
+        self.assertNotAllClose(first, second)
+        # The same `seed` reproduces the same sequence of masks.
+        same_seed = make_layer(0.3, seed=1)
+        same_seed(query, value)
+        same_seed.set_weights(layer.get_weights())
+        self.assertAllClose(run(same_seed, True), first)
+        # Gradients flow through the dropout path.
+        with tf.GradientTape() as tape:
+            loss = tf.reduce_sum(
+                layer(
+                    query, value, use_causal_mask=use_causal_mask, training=True
+                )
+                ** 2
+            )
+        grads = tape.gradient(loss, layer.trainable_variables)
+        self.assertTrue(
+            all(np.isfinite(ops.convert_to_numpy(g)).all() for g in grads)
+        )
+
+    @parameterized.named_parameters(
+        ("true", True), ("false", False), ("none", None)
+    )
+    def test_flash_attention_serialization(self, flash_attention):
+        # The argument round-trips as given, so a saved
+        # `flash_attention=True` still uses flash attention after loading,
+        # and `None` still follows the global setting.
+        layer = layers.GroupedQueryAttention(
+            head_dim=8,
+            num_query_heads=4,
+            num_key_value_heads=2,
+            flash_attention=flash_attention,
+        )
+        config = layer.get_config()
+        self.assertIs(config["flash_attention"], flash_attention)
+        restored = layers.GroupedQueryAttention.from_config(config)
+        self.assertEqual(restored._flash_attention, layer._flash_attention)
+        self.assertIs(restored.get_config()["flash_attention"], flash_attention)
+        restored = saving.deserialize_keras_object(
+            saving.serialize_keras_object(layer)
+        )
+        self.assertEqual(restored._flash_attention, layer._flash_attention)
+
+    def test_flash_attention_config_missing(self):
+        # Configs saved before `flash_attention` was serialized still load,
+        # following the global setting.
+        config = layers.GroupedQueryAttention(
+            head_dim=8, num_query_heads=4, num_key_value_heads=2
+        ).get_config()
+        del config["flash_attention"]
+        restored = layers.GroupedQueryAttention.from_config(config)
+        self.assertFalse(restored._flash_attention)
 
     @parameterized.named_parameters(
         ("disable_flash_attention", False), ("enable_flash_attention", True)

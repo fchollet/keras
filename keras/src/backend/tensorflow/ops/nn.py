@@ -1,5 +1,6 @@
 import functools
 import math
+import numbers
 import warnings
 
 import tensorflow as tf
@@ -1833,6 +1834,36 @@ def _dot_product_attention_xla(query, key, value, bias, mask, is_causal, scale):
     return tf.einsum("BNTS,BSNH->BTNH", probs, value, optimize="optimal")
 
 
+def _check_flash_attention_support(
+    query, bias, mask, scale, attn_logits_soft_cap
+):
+    """Raises a ValueError if `tf.nn.flash_attention` can't run these inputs."""
+
+    def fail(message):
+        raise ValueError(
+            f"Flash attention is not supported for these inputs: {message}"
+        )
+
+    if not hasattr(tf.nn, "flash_attention"):
+        fail("this TensorFlow build does not provide `tf.nn.flash_attention`.")
+    if bias is not None or mask is not None:
+        fail(
+            "`bias` and `mask` are not supported. Use `is_causal=True` for "
+            "causal masking."
+        )
+    if attn_logits_soft_cap is not None:
+        fail("`attn_logits_soft_cap` is not supported.")
+    if query.dtype not in (tf.float16, tf.bfloat16, tf.float32):
+        fail(
+            "inputs must be float16, bfloat16 or float32. "
+            f"Received: dtype={query.dtype.name}."
+        )
+    if scale is not None and not isinstance(scale, numbers.Real):
+        fail(f"`scale` must be a Python number. Received: {scale}.")
+    if scale is None and query.shape[-1] is None:
+        fail("the head dim must be statically known when `scale` is None.")
+
+
 def dot_product_attention(
     query,
     key,
@@ -1843,12 +1874,19 @@ def dot_product_attention(
     is_causal=False,
     flash_attention=None,
     attn_logits_soft_cap=None,
+    dropout_rate=0.0,
+    seed=None,
 ):
+    # `dropout_rate` and `seed` are TensorFlow-only extensions used by the
+    # attention layers: `tf.nn.flash_attention` applies dropout to the
+    # attention weights inside the kernel, which the layers can't do
+    # themselves since the weights are never materialized.
     if flash_attention is None:
         flash_attention = False
-    if flash_attention:
+    if dropout_rate > 0.0 and not flash_attention:
         raise ValueError(
-            "Flash attention is not supported in tensorflow backend."
+            "`dropout_rate` is only supported with `flash_attention=True`. "
+            f"Received: dropout_rate={dropout_rate}"
         )
 
     # Ref: jax.nn.dot_product_attention
@@ -1879,6 +1917,20 @@ def dot_product_attention(
         groups = num_query_heads // num_kv_heads
         key = tf.repeat(key, repeats=groups, axis=2)
         value = tf.repeat(value, repeats=groups, axis=2)
+
+    if flash_attention:
+        _check_flash_attention_support(
+            query, bias, mask, scale, attn_logits_soft_cap
+        )
+        return tf.nn.flash_attention(
+            query,
+            key,
+            value,
+            scale=None if scale is None else float(scale),
+            is_causal=is_causal,
+            dropout_rate=float(dropout_rate),
+            seed=seed,
+        )
 
     if bias is not None:
         bias = convert_to_tensor(bias, dtype=compute_dtype)
