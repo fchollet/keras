@@ -225,7 +225,7 @@ class Progbar:
                     if not isinstance(values, float):
                         values = np.mean(values)
                     avg = values / max(1, count)
-                    if avg > 1e-3:
+                    if abs(avg) > 1e-3:
                         info += f" {avg:.4f}"
                     else:
                         info += f" {avg:.4e}"
