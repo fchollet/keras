@@ -3405,20 +3405,20 @@ def tril(x, k=0):
     x = convert_to_tensor(x)
     # `tf.linalg.band_part` raises when the band width exceeds the matrix
     # size, so build the mask explicitly. This works for any `k`.
+    k = tf.cast(k, "int32")
     shape = tf.shape(x)
-    rows, cols = shape[-2], shape[-1]
-    i, j = tf.meshgrid(tf.range(rows), tf.range(cols), indexing="ij")
-    mask = i >= j - k
-    return tf.where(tf.broadcast_to(mask, shape), x, tf.zeros_like(x))
+    i = tf.range(shape[-2])[:, None]
+    j = tf.range(shape[-1])[None, :]
+    return tf.where(i >= j - k, x, tf.zeros_like(x))
 
 
 def triu(x, k=0):
     x = convert_to_tensor(x)
+    k = tf.cast(k, "int32")
     shape = tf.shape(x)
-    rows, cols = shape[-2], shape[-1]
-    i, j = tf.meshgrid(tf.range(rows), tf.range(cols), indexing="ij")
-    mask = i <= j - k
-    return tf.where(tf.broadcast_to(mask, shape), x, tf.zeros_like(x))
+    i = tf.range(shape[-2])[:, None]
+    j = tf.range(shape[-1])[None, :]
+    return tf.where(i <= j - k, x, tf.zeros_like(x))
 
 
 def trunc(x):
