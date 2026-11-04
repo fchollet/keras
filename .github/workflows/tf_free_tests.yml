@@ -31,8 +31,10 @@ jobs:
 
       - name: Install Python dependencies
         run: |
-          pip install -r requirements.txt
-          pip uninstall -y keras tensorflow tensorflow-cpu
+          sed '/^tensorflow/d' requirements.txt > requirements-tf-free.txt
+          pip install -r requirements-tf-free.txt
+          rm requirements-tf-free.txt
+          pip uninstall -y keras
 
       - name: Check that TensorFlow is not installed
         run: |
