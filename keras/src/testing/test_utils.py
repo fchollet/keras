@@ -1,9 +1,7 @@
 import contextlib
-import itertools
 
 import numpy as np
 
-from keras.src import backend
 from keras.src.backend import config
 from keras.src.utils.module_utils import jax
 
@@ -204,53 +202,6 @@ def _jax_explicit_x64_scope(allow):
         yield
     finally:
         jax.config.update("jax_explicit_x64_dtypes", previous)
-
-
-# Input dtype pools of the op dtype tests. No 64-bit dtypes yet; torch also
-# tests float64 for multi-input ops, as the old `NumpyDtypeTest` did.
-DEFAULT_INPUT_DTYPES = (
-    "bool",
-    "int8",
-    "int16",
-    "int32",
-    "uint8",
-    "uint16",
-    "uint32",
-    "bfloat16",
-    "float16",
-    "float32",
-)
-BINARY_INPUT_DTYPES = DEFAULT_INPUT_DTYPES + (
-    ("float64",) if backend.backend() == "torch" else ()
-)
-
-
-def named_dtype_combinations(num_inputs, ordered=False, dtypes=None):
-    """Returns `(name, dtypes)` pairs of input dtype combinations.
-
-    `dtypes` is one pool shared by all inputs (default: the pools above),
-    giving unordered combinations with same-dtype pairs, or every ordered
-    combination if `ordered`; or a list of one pool per input, giving their
-    product. Names are the joined dtypes, e.g. `"int8_uint32"`. The pairs
-    are valid `named_parameters` entries.
-    """
-    if dtypes is None:
-        dtypes = (
-            DEFAULT_INPUT_DTYPES if num_inputs == 1 else BINARY_INPUT_DTYPES
-        )
-    if isinstance(dtypes[0], str):
-        if ordered:
-            combos = itertools.product(dtypes, repeat=num_inputs)
-        else:
-            combos = itertools.combinations_with_replacement(dtypes, num_inputs)
-    elif len(dtypes) != num_inputs:
-        raise ValueError(
-            f"Expected {num_inputs} dtype pools, one per input. "
-            f"Received: {len(dtypes)}."
-        )
-    else:
-        combos = itertools.product(*dtypes)
-    return [("_".join(combo), combo) for combo in combos]
 
 
 def serialized_variable(layer, name):

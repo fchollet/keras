@@ -1,7 +1,6 @@
 import numpy as np
 from absl.testing import parameterized
 
-from keras.src import backend
 from keras.src.testing import test_case
 from keras.src.testing import test_utils
 
@@ -291,43 +290,3 @@ class NamedProductTest(parameterized.TestCase):
     )
     def test_via_decorator_no_product(self, numeral_type):
         self.assertIn(numeral_type, (float, int))
-
-
-class NamedDtypeCombinationsTest(test_case.TestCase):
-    POOL = test_utils.DEFAULT_INPUT_DTYPES
-
-    def test_shared_pool_counts(self):
-        combos = test_utils.named_dtype_combinations
-        self.assertLen(combos(1, dtypes=self.POOL), 10)
-        self.assertLen(combos(2, dtypes=self.POOL), 55)
-        self.assertLen(combos(2, ordered=True, dtypes=self.POOL), 100)
-
-    def test_names_and_values(self):
-        cases = test_utils.named_dtype_combinations(2, dtypes=self.POOL)
-        names = [name for name, _ in cases]
-        self.assertLen(set(names), len(names))
-        self.assertIn("int8_uint32", names)
-        self.assertNotIn("uint32_int8", names)
-        self.assertIn(("int8_int8", ("int8", "int8")), cases)
-
-    def test_per_input_pools(self):
-        pools = [self.POOL, self.POOL[:3]]
-        cases = test_utils.named_dtype_combinations(2, dtypes=pools)
-        self.assertLen(cases, 30)
-        self.assertEqual(
-            cases, test_utils.named_dtype_combinations(2, True, pools)
-        )
-        for _, dtypes in cases:
-            self.assertIn(dtypes[1], self.POOL[:3])
-
-    def test_per_input_pools_length_mismatch(self):
-        with self.assertRaisesRegex(ValueError, "Expected 2 dtype pools"):
-            test_utils.named_dtype_combinations(2, dtypes=[self.POOL] * 3)
-
-    def test_binary_pool_default(self):
-        is_torch = backend.backend() == "torch"
-        self.assertEqual("float64" in test_utils.BINARY_INPUT_DTYPES, is_torch)
-        self.assertLen(test_utils.named_dtype_combinations(1), 10)
-        self.assertLen(
-            test_utils.named_dtype_combinations(2), 66 if is_torch else 55
-        )

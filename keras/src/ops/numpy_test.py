@@ -17,7 +17,8 @@ from keras.src.backend.common import is_int_dtype
 from keras.src.backend.common import standardize_dtype
 from keras.src.backend.common.keras_tensor import KerasTensor
 from keras.src.ops import numpy as knp
-from keras.src.testing.test_case import X
+from keras.src.testing.op_test_case import X
+from keras.src.testing.op_test_case import named_dtype_combinations
 from keras.src.testing.test_utils import named_product
 
 BACKEND_AGNOSTIC_OPS = [
@@ -13696,14 +13697,17 @@ class AddTest(testing.BinaryOpTest):
 class PowerTest(testing.BinaryOpTest):
     op, op_class = knp.power, knp.Power
     reference_fn, jax_fn = np.power, jnp.power
-    ordered = True  # Base and exponent play different roles.
 
-    def test_input_dtypes_bool_bool(self):
-        self.skipTest(
-            "TODO: eager output is int8 (numpy) or int32 (jax) while the "
-            "symbolic output is bool; tensorflow and torch have no bool "
-            "kernel."
-        )
+    # Base and exponent play different roles: test every order.
+    @parameterized.named_parameters(named_dtype_combinations(2, ordered=True))
+    def test_input_dtypes(self, dtypes):
+        if dtypes == ("bool", "bool"):
+            self.skipTest(
+                "TODO: eager output is int8 (numpy) or int32 (jax) while the "
+                "symbolic output is bool; tensorflow and torch have no bool "
+                "kernel."
+            )
+        self.check_input_dtypes(dtypes)
 
     def test_incompatible_shapes(self):
         with self.assertRaises(ValueError):
@@ -13723,7 +13727,7 @@ class SumTest(testing.ReductionOpTest):
         self.check_input_dtypes(("uint8",))
 
 
-class SqueezeTest(testing.OpTest):
+class SqueezeTest(testing.UnaryOpTest):
     op, op_class = knp.squeeze, knp.Squeeze
     reference_fn, jax_fn = np.squeeze, jnp.squeeze
     # With unknown dimensions, the op can't tell which axes have size 1.
