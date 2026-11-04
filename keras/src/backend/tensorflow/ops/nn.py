@@ -1314,10 +1314,10 @@ def one_hot(x, num_classes, axis=-1, dtype=None, sparse=False):
         values = tf.reshape(x, (values_count,))
         # We deal with negative inputs by having zeros in the output although
         # it's useless. It makes shapes static.
-        values = tf.cast(tf.greater_equal(values, 0), dtype=dtype)
+        values = tf.cast((values >= 0) & (values < num_classes), dtype=dtype)
         indices = [tf.range(dim) for dim in x.shape]
         indices = tf.meshgrid(*indices, indexing="ij")
-        indices.insert(axis, tf.maximum(x, 0))  # Deal with negative indices
+        indices.insert(axis, tf.clip_by_value(x, 0, num_classes - 1))
         indices = [tf.reshape(a, (values_count, 1)) for a in indices]
         indices = [tf.cast(a, tf.int64) for a in indices]
         indices = tf.concat(indices, axis=1)

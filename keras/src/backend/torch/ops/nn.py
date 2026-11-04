@@ -20,8 +20,6 @@ from keras.src.backend.common.backend_utils import (
 from keras.src.backend.torch.ops.core import cast
 from keras.src.backend.torch.ops.core import convert_to_tensor
 from keras.src.backend.torch.ops.core import get_device
-from keras.src.backend.torch.ops.numpy import expand_dims
-from keras.src.backend.torch.ops.numpy import where
 from keras.src.utils.argument_validation import standardize_tuple
 
 
