@@ -91,8 +91,14 @@ class RandomShear(BaseImagePreprocessingLayer):
         **kwargs,
     ):
         super().__init__(data_format=data_format, **kwargs)
-        self.x_factor = self._set_factor_with_name(x_factor, "x_factor")
-        self.y_factor = self._set_factor_with_name(y_factor, "y_factor")
+        self.x_factor = x_factor
+        self.x_lower, self.x_upper = self._set_factor_with_name(
+            x_factor, "x_factor"
+        )
+        self.y_factor = y_factor
+        self.y_lower, self.y_upper = self._set_factor_with_name(
+            y_factor, "y_factor"
+        )
 
         if fill_mode not in self._SUPPORTED_FILL_MODE:
             raise NotImplementedError(
@@ -172,15 +178,15 @@ class RandomShear(BaseImagePreprocessingLayer):
         )
 
         shear_y = self.backend.random.uniform(
-            minval=self.y_factor[0],
-            maxval=self.y_factor[1],
+            minval=self.y_lower,
+            maxval=self.y_upper,
             shape=[batch_size, 1],
             seed=seed,
             dtype=self.compute_dtype,
         )
         shear_x = self.backend.random.uniform(
-            minval=self.x_factor[0],
-            maxval=self.x_factor[1],
+            minval=self.x_lower,
+            maxval=self.x_upper,
             shape=[batch_size, 1],
             seed=seed,
             dtype=self.compute_dtype,

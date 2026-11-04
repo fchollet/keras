@@ -26,6 +26,12 @@ class RandomShearTest(testing.TestCase):
             expected_output_shape=(8, 3, 4, 3),
         )
 
+    def test_config_with_float_factors(self):
+        # A float factor `f` is used as the range `(-f, f)`. `get_config()`
+        # must return a factor that the constructor accepts again.
+        layer = layers.RandomShear(x_factor=0.1, y_factor=0.2, seed=1)
+        self.run_class_serialization_test(layer)
+
     def test_random_posterization_inference(self):
         seed = 3481
         layer = layers.RandomShear(1, 1)
