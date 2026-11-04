@@ -948,7 +948,7 @@ def sparse_categorical_crossentropy(target, output, from_logits=False, axis=-1):
         output = np.clip(output, backend.epsilon(), 1.0 - backend.epsilon())
         log_prob = np.log(output)
     target = one_hot(target, output.shape[axis], axis=axis)
-    return -np.sum(target * log_prob, axis=axis)
+    return -np.sum(np.where(target > 0, log_prob, 0.0), axis=axis)
 
 
 def binary_crossentropy(target, output, from_logits=False):
