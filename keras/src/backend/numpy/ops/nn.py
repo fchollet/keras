@@ -6,6 +6,8 @@ from jax import lax
 
 from keras.src import backend
 from keras.src.backend.common import dtypes
+from keras.src.backend.common import is_float_dtype
+from keras.src.backend.common import standardize_dtype
 from keras.src.backend.common.backend_utils import canonicalize_axis
 from keras.src.backend.common.backend_utils import check_conv_input_channels
 from keras.src.backend.common.backend_utils import (
@@ -47,7 +49,7 @@ def sparse_sigmoid(x):
     # `0.5` below truncates to 0 under an integer dtype, which drops the
     # midpoint so every input in (-1, 1) maps to 0.
     float_dtype = dtypes.promote_to_float_dtype(x.dtype)
-    if float_dtype != backend.standardize_dtype(x.dtype):
+    if float_dtype != standardize_dtype(x.dtype):
         x = cast(x, float_dtype)
     return np.where(
         x <= -1,
@@ -80,7 +82,7 @@ def softsign(x):
 def soft_shrink(x, threshold=0.5):
     x = convert_to_tensor(x)
     float_dtype = dtypes.promote_to_float_dtype(x.dtype)
-    if float_dtype != backend.standardize_dtype(x.dtype):
+    if float_dtype != standardize_dtype(x.dtype):
         x = cast(x, float_dtype)
     return np.where(
         x > threshold,
@@ -96,7 +98,7 @@ def soft_shrink(x, threshold=0.5):
 def sparse_plus(x):
     x = convert_to_tensor(x)
     float_dtype = dtypes.promote_to_float_dtype(x.dtype)
-    if float_dtype != backend.standardize_dtype(x.dtype):
+    if float_dtype != standardize_dtype(x.dtype):
         x = cast(x, float_dtype)
     return np.where(
         x <= -1,
@@ -127,7 +129,7 @@ def leaky_relu(x, negative_slope=0.2):
     # `negative_slope` truncates to 0 under an integer dtype, which leaves
     # `maximum(x, 0)`, i.e. `relu`.
     float_dtype = dtypes.promote_to_float_dtype(x.dtype)
-    if float_dtype != backend.standardize_dtype(x.dtype):
+    if float_dtype != standardize_dtype(x.dtype):
         x = cast(x, float_dtype)
     return np.maximum(x, np.array(negative_slope, x.dtype) * x)
 
@@ -136,7 +138,7 @@ def hard_sigmoid(x):
     # `0.5` below truncates to 0 under an integer dtype, which drops the
     # offset and turns this into `clip(x / 6, 0, 1)`.
     float_dtype = dtypes.promote_to_float_dtype(x.dtype)
-    if float_dtype != backend.standardize_dtype(x.dtype):
+    if float_dtype != standardize_dtype(x.dtype):
         x = cast(x, float_dtype)
     # python numbers will be promoted to float64 by np, so it's necessary to
     # first convert the python numbers to np scalars
@@ -150,7 +152,7 @@ def hard_sigmoid(x):
 
 def hard_silu(x):
     float_dtype = dtypes.promote_to_float_dtype(x.dtype)
-    if float_dtype != backend.standardize_dtype(x.dtype):
+    if float_dtype != standardize_dtype(x.dtype):
         x = cast(x, float_dtype)
     return x * hard_sigmoid(x)
 
@@ -167,7 +169,7 @@ def selu(x):
     scale = 1.0507009873554804934193349852946
     x = convert_to_tensor(x)
     float_dtype = dtypes.promote_to_float_dtype(x.dtype)
-    if float_dtype != backend.standardize_dtype(x.dtype):
+    if float_dtype != standardize_dtype(x.dtype):
         x = cast(x, float_dtype)
     return np.array(scale, x.dtype) * elu(x, alpha)
 
@@ -175,7 +177,7 @@ def selu(x):
 def gelu(x, approximate=True):
     x = convert_to_tensor(x)
     float_dtype = dtypes.promote_to_float_dtype(x.dtype)
-    if float_dtype != backend.standardize_dtype(x.dtype):
+    if float_dtype != standardize_dtype(x.dtype):
         x = cast(x, float_dtype)
     # followed by JAX's implementation
     if approximate:
@@ -952,7 +954,7 @@ def sparse_categorical_crossentropy(target, output, from_logits=False, axis=-1):
 def binary_crossentropy(target, output, from_logits=False):
     target = np.array(target)
     output = np.array(output)
-    if not backend.is_float_dtype(output.dtype):
+    if not is_float_dtype(output.dtype):
         output = cast(output, backend.floatx())
     target = cast(target, output.dtype)
     dtype = output.dtype
@@ -983,7 +985,7 @@ def moments(x, axes, keepdims=False, synchronized=False):
     # workaround, we simply perform the operations on float32 and convert back
     # to float16
     need_cast = False
-    ori_dtype = backend.standardize_dtype(x.dtype)
+    ori_dtype = standardize_dtype(x.dtype)
     if ori_dtype == "float16":
         need_cast = True
         x = cast(x, "float32")
@@ -1397,7 +1399,7 @@ def psnr(x1, x2, max_val):
 
 
 def _get_large_negative(dtype):
-    dtype = backend.standardize_dtype(dtype)
+    dtype = standardize_dtype(dtype)
     val = 65500.0 if dtype == "float16" else 3.38953e38
     return np.asarray(val * -0.7, dtype=dtype)
 
@@ -1425,7 +1427,7 @@ def _apply_masks(logits, mask, is_causal):
 def _dot_product_attention_xla(query, key, value, bias, mask, is_causal, scale):
     original_dtype = key.dtype
     logits_dtype = np.promote_types(query.dtype, np.float32)
-    if backend.standardize_dtype(key.dtype) == "bfloat16":
+    if standardize_dtype(key.dtype) == "bfloat16":
         # `np.einsum` doesn't support bfloat16
         key = key.astype("float32")
         value = value.astype("float32")
@@ -1442,7 +1444,7 @@ def _dot_product_attention_xla(query, key, value, bias, mask, is_causal, scale):
     padded_logits = padded_logits.astype(np.float32)
     probs = softmax(padded_logits, axis=-1).astype(original_dtype)
     encoded_dtype = probs.dtype
-    if backend.standardize_dtype(probs.dtype) == "bfloat16":
+    if standardize_dtype(probs.dtype) == "bfloat16":
         # `np.einsum` doesn't support bfloat16
         probs = probs.astype("float32")
         value = value.astype("float32")

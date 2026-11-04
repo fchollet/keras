@@ -17,6 +17,7 @@ from keras.src import quantizers
 from keras.src import random
 from keras.src import saving
 from keras.src import testing
+from keras.src.backend.common import standardize_dtype
 from keras.src.layers.core.einsum_dense import _analyze_einsum_string
 from keras.src.quantizers.awq_config import AWQConfig
 from keras.src.quantizers.gptq_config import GPTQConfig
@@ -91,9 +92,7 @@ class EinsumDenseTest(testing.TestCase):
 
         if mode == "int4":
             # Verify kernel is int8 (packed int4)
-            self.assertEqual(
-                backend.standardize_dtype(layer._kernel.dtype), "int8"
-            )
+            self.assertEqual(standardize_dtype(layer._kernel.dtype), "int8")
 
     @parameterized.named_parameters(
         {
@@ -619,9 +618,9 @@ class EinsumDenseTest(testing.TestCase):
         layer.quantize(mode)
 
         # Verify weights dtype
-        self.assertEqual(backend.standardize_dtype(layer._kernel.dtype), "int8")
+        self.assertEqual(standardize_dtype(layer._kernel.dtype), "int8")
         self.assertEqual(
-            backend.standardize_dtype(layer.kernel_scale.dtype),
+            standardize_dtype(layer.kernel_scale.dtype),
             layer.variable_dtype,
         )
 
@@ -653,30 +652,24 @@ class EinsumDenseTest(testing.TestCase):
             dtype=f"{mode}_from_mixed_bfloat16",
         )
         layer.build((1, 8, 2, 4, 32))
-        self.assertEqual(backend.standardize_dtype(layer._kernel.dtype), "int8")
-        self.assertEqual(
-            backend.standardize_dtype(layer.kernel_scale.dtype), "float32"
-        )
+        self.assertEqual(standardize_dtype(layer._kernel.dtype), "int8")
+        self.assertEqual(standardize_dtype(layer.kernel_scale.dtype), "float32")
         layer = layers.EinsumDense(
             equation="a,b->ab",  # Test expand
             output_shape=(4,),
             dtype=f"{mode}_from_float32",
         )
         layer.build((None,))
-        self.assertEqual(backend.standardize_dtype(layer._kernel.dtype), "int8")
-        self.assertEqual(
-            backend.standardize_dtype(layer.kernel_scale.dtype), "float32"
-        )
+        self.assertEqual(standardize_dtype(layer._kernel.dtype), "int8")
+        self.assertEqual(standardize_dtype(layer.kernel_scale.dtype), "float32")
         layer = layers.EinsumDense(
             equation="ab,ab->a",  # Test squeeze
             output_shape=(2,),
             dtype="int8_from_float32",
         )
         layer.build((2, 4))
-        self.assertEqual(backend.standardize_dtype(layer._kernel.dtype), "int8")
-        self.assertEqual(
-            backend.standardize_dtype(layer.kernel_scale.dtype), "float32"
-        )
+        self.assertEqual(standardize_dtype(layer._kernel.dtype), "int8")
+        self.assertEqual(standardize_dtype(layer.kernel_scale.dtype), "float32")
 
     @parameterized.named_parameters(
         (
@@ -878,7 +871,7 @@ class EinsumDenseTest(testing.TestCase):
     @parameterized.named_parameters(
         ("int8", "int8_from_float32", 3),
         ("float8", "float8_from_float32", 8),
-        ("int4", "int4_from_float32", 5),  # kernel + bias + scale + zero + gidx
+        ("int4", "int4_from_float32", 3),  # kernel + bias + scale
     )
     def test_quantize_by_setting_dtype_policy(
         self, policy, expected_num_variables
@@ -2194,8 +2187,8 @@ class EinsumDenseTest(testing.TestCase):
             v_cfg = vars_cfg[name]
             self.assertEqual(tuple(v_str.shape), tuple(v_cfg.shape))
             self.assertEqual(
-                backend.standardize_dtype(v_str.dtype),
-                backend.standardize_dtype(v_cfg.dtype),
+                standardize_dtype(v_str.dtype),
+                standardize_dtype(v_cfg.dtype),
             )
             self.assertAllClose(v_str, v_cfg)
 
@@ -2253,7 +2246,7 @@ class EinsumDenseTest(testing.TestCase):
         else:
             self.assertIsNotNone(layer.g_idx)
             self.assertEqual(tuple(layer.g_idx.shape), (input_dim,))
-        self.assertEqual(backend.standardize_dtype(layer._kernel.dtype), "int8")
+        self.assertEqual(standardize_dtype(layer._kernel.dtype), "int8")
 
         x = np.random.random((2, input_dim)).astype("float32")
         self.assertEqual(tuple(layer(x).shape), (2, output_dim))

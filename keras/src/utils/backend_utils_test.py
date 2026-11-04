@@ -4,6 +4,7 @@ from absl.testing import parameterized
 
 from keras.src import backend
 from keras.src import testing
+from keras.src.backend.common import standardize_dtype
 from keras.src.utils import backend_utils
 
 
@@ -16,7 +17,7 @@ class BackendUtilsTest(testing.TestCase):
     )
     def test_dynamic_backend(self, name):
         dynamic_backend = backend_utils.DynamicBackend()
-        x = np.random.uniform(size=[1, 2, 3]).astype("float32")
+        x = np.random.uniform(size=[1, 2, 3])
 
         if name == "numpy":
             dynamic_backend.set_backend(name)
@@ -58,7 +59,7 @@ class BackendUtilsTest(testing.TestCase):
         x = np.random.uniform(size=[1, 2, 3]).astype("float32")
 
         y = dynamic_backend.cast(x, "float16")
-        self.assertEqual(backend.standardize_dtype(y.dtype), "float16")
+        self.assertEqual(standardize_dtype(y.dtype), "float16")
         self.assertAllClose(
             dynamic_backend.convert_to_numpy(dynamic_backend.numpy.log10(x)),
             np.log10(x),

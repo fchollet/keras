@@ -42,15 +42,15 @@ class Variable(KerasVariable):
         from keras.src.distribution.distribution_lib import TensorLayout
 
         self._initialize_layout()
-        jax_layout = (
-            self._layout.backend_layout
-            if isinstance(self._layout, TensorLayout)
-            else self._layout
-        )
 
         if self._layout is None:
             super()._initialize_with_initializer(initializer)
         elif "layout" in inspect.signature(initializer).parameters:
+            jax_layout = (
+                self._layout.backend_layout
+                if isinstance(self._layout, TensorLayout)
+                else self._layout
+            )
             with jax.set_mesh(jax_layout.mesh):
                 # Force explicit axes in this context, otherwise `out_sharding`
                 # in ops ends up being ignored.
@@ -65,7 +65,12 @@ class Variable(KerasVariable):
                     )
 
                 self._value = explicit_initializer(in_sharding=None)
-        elif should_shard_at_init(jax_layout, self._shape):
+        elif should_shard_at_init(self._layout, self._shape):
+            jax_layout = (
+                self._layout.backend_layout
+                if isinstance(self._layout, TensorLayout)
+                else self._layout
+            )
             jitted_initializer = jax.jit(
                 initializer.__call__,
                 out_shardings=jax_layout,
@@ -355,11 +360,23 @@ if config.is_nnx_enabled():
 
 
 def should_shard_at_init(init_layout, shape):
+    from keras.src.distribution.distribution_lib import TensorLayout
+
+    if isinstance(init_layout, TensorLayout):
+        devices_count = init_layout.device_mesh.devices.size
+    elif isinstance(init_layout, jax.sharding.NamedSharding):
+        devices_count = init_layout.mesh.devices.size
+    else:
+        # Keras itself creates `NamedSharding` instances that have a `mesh`
+        # attribute. However, KerasRS uses layouts and formats, which do not
+        # directly have a mesh attribute. Apply the sharding in this case.
+        return True
+
     size_threshold = 250 * 1024 * 1024
     # We multiply by the mesh size here to take into account the worst case
     # scenario of the array being first duplicated in the memory of one device
     # before being transferred to the other devices.
-    size = python_math.prod(shape) * 4 * init_layout.mesh.devices.size
+    size = python_math.prod(shape) * 4 * devices_count
     return size >= size_threshold
 
 

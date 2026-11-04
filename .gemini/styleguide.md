@@ -260,7 +260,7 @@ as the reference implementation.
 
 ### API Design & Validation
 
-- **Early Validation**: Perform axis canonicalization (using `canonicalize_axis` or `canonicalize_axes`) early to catch errors during graph building: typically in `compute_output_spec` or in the backend implementation of an op if the backend native op doesn't validate the axis. Validate axis uniqueness *after* canonicalization.
+- **Early Validation**: Perform axis canonicalization (using `canonicalize_axis` or `canonicalize_axes`) early to catch errors: in `compute_output_spec` for symbolic inputs and in the backend implementation of the op for eager inputs, if the backend native op doesn't validate the axis. Validate axis uniqueness *after* canonicalization.
 
 ### Testing
 
@@ -270,10 +270,76 @@ as the reference implementation.
 
 ---
 
+## Conventions from maintainer reviews
+
+Flag violations even when the surrounding code doesn't follow these guidelines.
+
+### Scope of a pull request
+
+- **One concern per PR**: Flag changes unrelated to the stated goal, such as drive-by refactors, reformatting of untouched lines, files from another PR, or stray debug scripts. Ask the author to revert them or open a separate PR. Breaking changes always go in their own PR.
+- **Fix the root cause in the right place**: A bug in one backend's implementation is fixed in that backend, not worked around in shared code. Disabling the feature is not a fix.
+- **Performance changes need evidence**: Ask for measured speedups, and compile-time cost if relevant, in the PR description. Push back on micro-optimizations that make core code like `Layer.__call__` harder to read without a measurable gain.
+- **Tutorials and demos go to keras-io**: Notebooks, guides and demo scripts don't belong in this repo. Ask for a Colab link in the PR description instead.
+- **Description matches the change**: The PR title and description should cover every change made, and link the issue being fixed.
+
+### Simplicity
+
+- **Remove dead and redundant code**: Flag unused imports, parameters and helpers; branches that only re-pass default values; checks the caller already did; `hasattr` or `getattr(self, "_x", None)` for attributes always set in `__init__`; overrides that repeat what the superclass already does; and caches without a measured benefit.
+- **Reuse existing utilities**: Before accepting a new helper, check for an existing one (e.g. `canonicalize_axis`/`canonicalize_axes` instead of `axis % ndim`, `to_tuple_or_list`, `backend.convert_to_numpy`, the `tree` API for nested structures, `serialization_lib`). When the same logic appears twice, factor it into one helper.
+- **Readable control flow**: Prefer early `return`/`continue`, named intermediate values and at most one level of nesting. Avoid unexplained arithmetic constants and expressions spread over many lines.
+- **No broad `try`/`except`**: Don't catch broad exceptions or use `try`/`except` for control flow when an explicit check is possible. It hides real errors.
+- **Keep hot paths cheap**: In code that runs on every op or every layer call (`convert_to_tensor`, `Layer.__call__`, dtype resolution), flag redundant conversions and copies (a no-op `np.asarray`, a `convert_to_tensor` whose result is discarded, converting the same value twice). Do cheap early-exit checks before expensive conversions.
+
+### Imports
+
+- **Import from `keras.src`**: Never `import keras` inside the library or its unit tests, because it can cause circular imports.
+- **Imports at the top of the module**: Flag function-local imports unless they are needed to break a circular import.
+
+### Comments, docstrings and naming
+
+- **Comments describe the code, not the PR**: Flag comments that mention "previously", the old behavior, the bug history, issue links, or how the bug was found. That context belongs in the commit message and can be found with `git blame`. Ask to cut long explanatory comments to one line, or remove them when the code is self-explanatory. Don't add file-level comments, and don't remove useful existing comments.
+- **No comments in unit tests**: Unless what the test exercises is really not obvious.
+- **Docstrings match the behavior**: Flag docstrings that describe features that weren't implemented or make claims the code doesn't back up. Document new arguments the same way sibling classes do, including the default value, and update the docstring when a contract changes.
+- **Accurate and consistent names**: Names must not overclaim (e.g. `fused_*` when fusion isn't guaranteed) and must reuse the term already used for the same concept nearby, internal names included (e.g. `num_processes`/`process_id`, not `world_size`/`rank`). Method names start with a verb. Keep wording neutral (no `victim`/`attacker` in tests).
+
+### Multi-backend code and ops
+
+- **Validation goes in the backend implementations**: Input validation, argument normalization and `convert_to_tensor` must not live only in the public function in `keras/src/ops/`. Keras internals call `backend.*` directly and skip it. Likewise, validation placed only in `compute_output_spec` is skipped for eager inputs, because `compute_output_spec` is only called on symbolic inputs. The symbolic and eager paths must agree on shapes, dtypes and errors.
+- **Same behavior on every backend**: When a fix or feature lands in one backend, ask for it in all backends (including NumPy), or for a reason why not. When backends disagree, JAX is the reference.
+- **No backend-specific code in shared code**: Layers, losses, metrics and trainers must not branch on `backend.backend()`. Use an op or a hook that a backend can override. Never hardcode a list of backend names; use capability flags such as `backend.SUPPORTS_GRADIENT` so that pluggable backends keep working.
+- **Ops run natively**: An op implementation must not forward to NumPy or SciPy. Ops must work on backend tensors, on GPU/TPU, and under compilation.
+- **Keras ops for tensor comparisons**: On tensors, use `ops.less`, `ops.greater`, `ops.equal`, etc. instead of `<`, `>`, `==`.
+- **Plain Python for shapes**: Do not use Keras ops to manipulate shapes and dimensions. Instead, use plain Python operators (`+`, `*`) and `math.prod`. This handles both ints and symbolic dimensions properly.
+- **`ops.shape(x)` in backend-independent code**: Use `ops.shape(x)` instead of `x.shape` in backend-independent code to support dynamic / symbolic dimensions.
+
+### Dtypes
+
+- **Only promote integer and bool inputs**: When an op needs a float input, cast only integer and bool dtypes. Leave float inputs in their dtype: don't upcast `bfloat16`/`float16` to `float32`, and don't downcast `float64`. Follow the promotion pattern of similar ops.
+- **Dtype tests cover the edge dtypes**: Dtype tests should include `bfloat16`, `float64`, integer and bool inputs, not only `FLOAT_DTYPES`.
+
+### Tests
+
+- **Tests must be able to fail**: Check values, not just shapes and types. A test that only checks `assertIsNotNone` or that the code doesn't raise is not enough. Use non-trivial inputs (not just `0`). Ask whether the new test would pass on the code before the fix. Every bug fix and every new branch needs a test that exercises it.
+- **No redundant tests**: Flag tests that duplicate existing coverage, e.g. the multi-backend tests in `keras/src/ops/*_test.py`. When an existing test misses a case, augment that test instead of adding a new one.
+- **No new test files or classes**: You almost never need to add a new test file or a new test class. There should be a `_test.py` file for the module you modified.
+- **Extend and parameterize existing tests**: Add cases to the existing test or its parameterization (e.g. `NNOpsDtypeTest`) instead of new test functions. Use `absl.testing.parameterized` (`named_parameters`, `product`, `testing.named_product`) instead of loops, `self.subTest`, copy-pasted variants or `pytest.mark.parametrize`.
+- **Shared tests stay shared**: A test with nothing backend-specific goes in the shared test module, without a backend `skipif`, even if the bug fixed was backend-specific. Shared test helpers go in `test_utils`, not in another `_test.py` module.
+- **Skip properly, or not at all**: Use `@pytest.mark.skipif` on the test or class, not `self.skipTest`. Exclude a test for a backend in that backend's `excluded_tests.txt`, not an `if backend.backend() == ...` check inside a test. Don't skip a test to hide a failure on one backend; fix the backend. Don't guard dependencies listed in the requirements files with `pytest.importorskip` or `try`/`except ImportError`.
+- **Prefer real objects over mocks**: Mock only what can't be done for real. Test with real arrays, real packages and real distributions, and don't build impossible situations with mocks.
+- **No leaked global state**: Restore any global config a test changes (image data format, distribution, environment variables, flags) with `self.addCleanup`. Never modify `sys.modules` or the import system, or call `os.environ.clear()`. Call `super().setUp()` first.
+- **Write files only to the temp dir**: Assume the current folder is read-only. Only write files under `self.get_temp_dir()`, which automatically cleans up the directory.
+
+### Compatibility and serialization
+
+- **No silent breaking changes**: Flag changes to public method names, exception types, default numerics, `keras_export` names or their order, and the saved-model format. Renames need a backward-compatible alias. Intentional breaking changes need a release-notes entry under "Breaking changes".
+- **Serialization**: `get_config` returns what the user passed, not resolved values. Use `serialization_lib`. Save/load round trips must be idempotent.
+
+---
+
 When performing code reviews on pull requests, you must strictly adhere to the following principles in addition to the API design guidelines above:
 
 1. **Question the Necessity of Changes**: Do not assume that the pull request changes are strictly necessary. Critically review the proposed changes to ensure they add real value. Point out any code that is solving a non-existent problem or adding unnecessary complexity.
 2. **Call out "AI Slop"**: Actively look for and identify "AI slop"—generic, overly verbose, or hallucinated code that lacks context or violates best practices. If you suspect the code is AI slop, explicitly call it out.
 3. **Poke Holes in the Implementation**: Your goal is to critically test the logic. Actively search for and point out failing edge cases, race conditions, or unhandled exceptions in the implementation.
-4. **Demand Robustness**: Do not accept fragile code. If the proposed code is not robust enough or lacks proper error handling, explicitly tell the author why the current approach is brittle and what must be done to reinforce it.
+4. **Demand Robustness**: Do not accept fragile code. If the proposed code is not robust enough or lacks proper error handling, explicitly tell the author why the current approach is brittle and what must be done to reinforce it. Robustness means handling realistic inputs and edge cases correctly, not adding defensive checks for impossible states or catch-all exception handling.
 5. **Respect Existing Repo Patterns**: Before suggesting review comments (like asking users to add boilerplate or specific patterns), actively check for existing design patterns across the repository. Do not suggest adding useless code or structures that contradict or fall outside the established Keras repo coding style.

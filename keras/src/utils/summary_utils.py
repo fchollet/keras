@@ -11,8 +11,8 @@ import rich.markup
 # for below imports
 import rich.table
 
-from keras.src import backend
 from keras.src import tree
+from keras.src.backend.common import standardize_dtype
 from keras.src.utils import dtype_utils
 from keras.src.utils import io_utils
 
@@ -25,7 +25,7 @@ def count_params(weights):
 @functools.lru_cache(512)
 def _compute_memory_size(shape, dtype):
     weight_counts = math.prod(shape)
-    dtype = backend.standardize_dtype(dtype)
+    dtype = standardize_dtype(dtype)
     per_param_size = dtype_utils.dtype_size(dtype)
     return weight_counts * per_param_size
 
@@ -460,7 +460,7 @@ def print_quantization_summary(model, verbose=True):
 
     def _weight_bytes(weight):
         num_elements = math.prod(weight.shape)
-        dtype = backend.standardize_dtype(weight.dtype)
+        dtype = standardize_dtype(weight.dtype)
         return num_elements * dtype_utils.dtype_size(dtype) // 8
 
     rows = []
@@ -516,14 +516,12 @@ def print_quantization_summary(model, verbose=True):
                     if tensor is not None:
                         stored[id(tensor)] = tensor
             storage_bytes = sum(_weight_bytes(t) for t in stored.values())
-            storage_dtype = backend.standardize_dtype(
-                quantized_weights[0].codes.dtype
-            )
+            storage_dtype = standardize_dtype(quantized_weights[0].codes.dtype)
         elif keeps_float_weight:
             # The mode keeps the float weight (float8). Its scale and
             # history variables are not weight storage.
             logical_params = math.prod(geometry.weight_shape)
-            storage_dtype = backend.standardize_dtype(layer.variable_dtype)
+            storage_dtype = standardize_dtype(layer.variable_dtype)
             storage_bytes = (
                 logical_params * dtype_utils.dtype_size(storage_dtype) // 8
             )
@@ -533,7 +531,7 @@ def print_quantization_summary(model, verbose=True):
             primary = max(weights, key=lambda w: math.prod(w.shape))
             logical_params = math.prod(primary.shape)
             storage_bytes = _weight_bytes(primary)
-            storage_dtype = backend.standardize_dtype(primary.dtype)
+            storage_dtype = standardize_dtype(primary.dtype)
         float_bytes = logical_params * 4  # float32 baseline.
 
         rows.append(

@@ -4,6 +4,8 @@ import jax
 import jax.numpy as jnp
 
 from keras.src import backend
+from keras.src.backend.common import is_float_dtype
+from keras.src.backend.common import standardize_dtype
 from keras.src.backend.jax.ops.core import convert_to_tensor
 from keras.src.random.seed_generator import draw_seed
 
@@ -87,10 +89,10 @@ def rgb_to_hsv(images, data_format=None):
             "or rank 4 (batch of images). Received input with shape: "
             f"images.shape={images.shape}"
         )
-    if not backend.is_float_dtype(dtype):
+    if not is_float_dtype(dtype):
         raise ValueError(
             "Invalid images dtype: expected float dtype. "
-            f"Received: images.dtype={backend.standardize_dtype(dtype)}"
+            f"Received: images.dtype={standardize_dtype(dtype)}"
         )
     eps = jnp.finfo(dtype).eps
     images = jnp.where(jnp.abs(images) < eps, 0.0, images)
@@ -137,10 +139,10 @@ def hsv_to_rgb(images, data_format=None):
             "or rank 4 (batch of images). Received input with shape: "
             f"images.shape={images.shape}"
         )
-    if not backend.is_float_dtype(dtype):
+    if not is_float_dtype(dtype):
         raise ValueError(
             "Invalid images dtype: expected float dtype. "
-            f"Received: images.dtype={backend.standardize_dtype(dtype)}"
+            f"Received: images.dtype={standardize_dtype(dtype)}"
         )
     hue, saturation, value = jnp.split(images, 3, channels_axis)
     hue = jnp.squeeze(hue, channels_axis)
@@ -563,11 +565,13 @@ def perspective_transform(
     if data_format == "channels_first":
         images = jnp.transpose(images, (0, 2, 3, 1))
 
-    _, height, width, _ = images.shape
+    batch_size, height, width, _ = images.shape
     transforms = compute_homography_matrix(
         jnp.asarray(start_points, dtype="float32"),
         jnp.asarray(end_points, dtype="float32"),
     )
+    if transforms.shape[0] == 1 and batch_size > 1:
+        transforms = jnp.repeat(transforms, batch_size, axis=0)
 
     x, y = jnp.meshgrid(jnp.arange(width), jnp.arange(height), indexing="xy")
     grid = jnp.stack([x.ravel(), y.ravel(), jnp.ones_like(x).ravel()], axis=0)
@@ -712,7 +716,7 @@ def gaussian_blur(
 
     data_format = backend.standardize_data_format(data_format)
     images = convert_to_tensor(images)
-    dtype = backend.standardize_dtype(images.dtype)
+    dtype = standardize_dtype(images.dtype)
     sigma = convert_to_tensor(sigma, dtype=dtype)
 
     if len(images.shape) not in (3, 4):

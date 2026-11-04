@@ -5,8 +5,9 @@ from absl.testing import parameterized
 from keras.src import backend
 from keras.src import layers
 from keras.src import models
-from keras.src import ops
 from keras.src import testing
+from keras.src.backend.common import get_keras_mask
+from keras.src.backend.common import standardize_shape
 
 
 def np_dot(a, b, axes):
@@ -233,7 +234,7 @@ class MergingLayersTest(testing.TestCase):
         a = np.random.random(a_shape)
         b = np.random.random(b_shape)
         c = layers.Dot(axes=(-2, -1))([a, b])
-        self.assertEqual(backend.standardize_shape(c.shape), (1, 2, 1, 2))
+        self.assertEqual(standardize_shape(c.shape), (1, 2, 1, 2))
 
     def test_add_with_mask(self):
         mask = layers.Masking()
@@ -244,12 +245,12 @@ class MergingLayersTest(testing.TestCase):
 
         output = layers.Add()([x1, x2])
         self.assertAllClose(output, [[[0, 0], [1, 2], [1, 2], [6, 8]]])
-        self.assertIsNone(backend.get_keras_mask(output))
+        self.assertIsNone(get_keras_mask(output))
 
         x2 = mask(x2)
         output = layers.Add()([x1, x2])
         self.assertAllClose(output, [[[0, 0], [1, 2], [1, 2], [6, 8]]])
-        self.assertAllClose(backend.get_keras_mask(output), [[0, 1, 1, 1]])
+        self.assertAllClose(get_keras_mask(output), [[0, 1, 1, 1]])
 
     def test_subtract_with_mask(self):
         mask = layers.Masking()
@@ -260,12 +261,12 @@ class MergingLayersTest(testing.TestCase):
 
         output = layers.Subtract()([x1, x2])
         self.assertAllClose(output, [[[0, 0], [1, 2], [-1, -2], [0, 0]]])
-        self.assertIsNone(backend.get_keras_mask(output))
+        self.assertIsNone(get_keras_mask(output))
 
         x2 = mask(x2)
         output = layers.Subtract()([x1, x2])
         self.assertAllClose(output, [[[0, 0], [1, 2], [-1, -2], [0, 0]]])
-        self.assertAllClose(backend.get_keras_mask(output), [[0, 1, 1, 1]])
+        self.assertAllClose(get_keras_mask(output), [[0, 1, 1, 1]])
 
     def test_average_with_mask(self):
         mask = layers.Masking()
@@ -276,12 +277,12 @@ class MergingLayersTest(testing.TestCase):
 
         output = layers.Average()([x1, x2])
         self.assertAllClose(output, [[[0, 0], [0.5, 1], [0.5, 1], [3, 4]]])
-        self.assertIsNone(backend.get_keras_mask(output))
+        self.assertIsNone(get_keras_mask(output))
 
         x2 = mask(x2)
         output = layers.Average()([x1, x2])
         self.assertAllClose(output, [[[0, 0], [0.5, 1], [0.5, 1], [3, 4]]])
-        self.assertAllClose(backend.get_keras_mask(output), [[0, 1, 1, 1]])
+        self.assertAllClose(get_keras_mask(output), [[0, 1, 1, 1]])
 
     def test_multiply_with_mask(self):
         mask = layers.Masking()
@@ -292,12 +293,12 @@ class MergingLayersTest(testing.TestCase):
 
         output = layers.Multiply()([x1, x2])
         self.assertAllClose(output, [[[0, 0], [0, 0], [1, 2], [9, 16]]])
-        self.assertIsNone(backend.get_keras_mask(output))
+        self.assertIsNone(get_keras_mask(output))
 
         x2 = mask(x2)
         output = layers.Multiply()([x1, x2])
         self.assertAllClose(output, [[[0, 0], [1, 2], [1, 2], [9, 16]]])
-        self.assertAllClose(backend.get_keras_mask(output), [[0, 1, 1, 1]])
+        self.assertAllClose(get_keras_mask(output), [[0, 1, 1, 1]])
 
     def test_maximum_with_mask(self):
         mask = layers.Masking()
@@ -312,12 +313,12 @@ class MergingLayersTest(testing.TestCase):
 
         output = layers.Maximum()([x1, x2])
         self.assertAllClose(output, [[[0, 0], [0, 0], [-1, -2], [-3, -4]]])
-        self.assertIsNone(backend.get_keras_mask(output))
+        self.assertIsNone(get_keras_mask(output))
 
         x2 = mask(x2)
         output = layers.Maximum()([x1, x2])
         self.assertAllClose(output, [[[0, 0], [-1, -2], [-1, -2], [-3, -4]]])
-        self.assertAllClose(backend.get_keras_mask(output), [[0, 1, 1, 1]])
+        self.assertAllClose(get_keras_mask(output), [[0, 1, 1, 1]])
 
     def test_minimum_with_mask(self):
         mask = layers.Masking()
@@ -328,12 +329,12 @@ class MergingLayersTest(testing.TestCase):
 
         output = layers.Minimum()([x1, x2])
         self.assertAllClose(output, [[[0, 0], [0, 0], [1, 2], [3, 4]]])
-        self.assertIsNone(backend.get_keras_mask(output))
+        self.assertIsNone(get_keras_mask(output))
 
         x2 = mask(x2)
         output = layers.Minimum()([x1, x2])
         self.assertAllClose(output, [[[0, 0], [1, 2], [1, 2], [3, 4]]])
-        self.assertAllClose(backend.get_keras_mask(output), [[0, 1, 1, 1]])
+        self.assertAllClose(get_keras_mask(output), [[0, 1, 1, 1]])
 
     def test_concatenate_with_mask(self):
         mask = layers.Masking()
@@ -347,16 +348,14 @@ class MergingLayersTest(testing.TestCase):
             output,
             [[[0, 0], [1, 2], [0, 0], [3, 4], [0, 0], [0, 0], [1, 2], [3, 4]]],
         )
-        self.assertAllClose(
-            backend.get_keras_mask(output), [[0, 1, 0, 1, 1, 1, 1, 1]]
-        )
+        self.assertAllClose(get_keras_mask(output), [[0, 1, 0, 1, 1, 1, 1, 1]])
 
         output = layers.Concatenate(axis=2)([x1, x2])
         self.assertAllClose(
             output,
             [[[0, 0, 0, 0], [1, 2, 0, 0], [0, 0, 1, 2], [3, 4, 3, 4]]],
         )
-        self.assertAllClose(backend.get_keras_mask(output), [[1, 1, 1, 1]])
+        self.assertAllClose(get_keras_mask(output), [[1, 1, 1, 1]])
 
     def test_concatenate_with_mask_symbolic(self):
         input1 = layers.Input((4, 2))
@@ -364,7 +363,7 @@ class MergingLayersTest(testing.TestCase):
         mask = layers.Masking()
         output = layers.Concatenate(axis=1)([mask(input1), input2])
         model = models.Model(
-            inputs=[input1, input2], outputs=backend.get_keras_mask(output)
+            inputs=[input1, input2], outputs=get_keras_mask(output)
         )
         x1 = backend.ops.convert_to_tensor([[[0, 0], [1, 2], [0, 0], [3, 4]]])
         x2 = backend.ops.convert_to_tensor([[[0, 0], [0, 0], [1, 2], [3, 4]]])
@@ -375,7 +374,7 @@ class MergingLayersTest(testing.TestCase):
         x1 = np.ones((1, 1, 1, 1, 5))
         x2 = np.ones((1, 1, 1, 1, 4))
         out = layers.Concatenate(axis=-1)([x1, x2])
-        self.assertEqual(ops.shape(out), (1, 1, 1, 1, 9))
+        self.assertEqual(backend.ops.shape(out), (1, 1, 1, 1, 9))
 
         # This won't
         x1 = np.ones((1, 2, 1, 1, 5))

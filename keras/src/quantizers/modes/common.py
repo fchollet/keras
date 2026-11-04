@@ -5,8 +5,8 @@ sequence its call sites emitted inline, so modes that adopt them keep
 producing identical traced programs.
 """
 
-from keras.src import backend
 from keras.src import ops
+from keras.src.backend.common import standardize_dtype
 from keras.src.quantizers.strategy_registry import QuantizationStrategy
 
 
@@ -106,7 +106,7 @@ class GeometryDispatchStrategy(QuantizationStrategy):
 
 def cast_lookup_inputs(inputs):
     """Casts embedding-lookup indices to `int32` unless already integral."""
-    if backend.standardize_dtype(inputs.dtype) not in ("int32", "int64"):
+    if standardize_dtype(inputs.dtype) not in ("int32", "int64"):
         inputs = ops.cast(inputs, "int32")
     return inputs
 

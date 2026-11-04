@@ -14,7 +14,9 @@ from keras.src import models
 from keras.src import ops
 from keras.src import random
 from keras.src import testing
+from keras.src.backend.common import get_keras_mask
 from keras.src.backend.common import global_state
+from keras.src.backend.common import set_keras_mask
 from keras.src.backend.common.remat import RematScope
 from keras.src.models import Model
 from keras.src.quantizers.geometry import ProjectionGeometry
@@ -306,15 +308,17 @@ class LayerTest(testing.TestCase):
         self.assertLen(mock_remat.rematted_functions, 1)
         next(iter(mock_remat.rematted_functions.values())).assert_called()
 
-    def test_gptq_quantization_by_setting_dtype(self):
-        """Tests error being raised when dtype is set to GPTQ."""
+    @parameterized.named_parameters(("gptq", "gptq"), ("awq", "awq"))
+    def test_calibration_quantization_by_setting_dtype(self, mode):
+        """Tests error being raised when dtype is set to GPTQ or AWQ."""
         with self.assertRaisesRegex(
             ValueError,
-            "Implicitly enabling GPTQ quantization.*is not supported",
+            f"Implicitly enabling {mode.upper()} quantization.*is not "
+            "supported.*requires a calibration dataset",
         ):
             layer = layers.Dense(3)
             layer.build((2, 4))
-            layer.dtype_policy = "gptq/4/-1_from_float32"
+            layer.dtype_policy = f"{mode}/4/-1_from_float32"
 
     @pytest.mark.skipif(
         not backend.SUPPORTS_GRADIENT,
@@ -953,10 +957,10 @@ class LayerTest(testing.TestCase):
 
         x = ops.zeros((1, 2), dtype="float32")
         mask = ops.array([True, False])
-        backend.set_keras_mask(x, mask)
+        set_keras_mask(x, mask)
         y = CustomLayer(dtype="float16")(x)
         self.assertAllEqual(
-            backend.get_keras_mask(y),
+            get_keras_mask(y),
             mask,
             msg="Masking is not propagated by Autocast",
         )
@@ -994,7 +998,7 @@ class LayerTest(testing.TestCase):
         layer = BasicMaskedLayer()
         x = backend.ops.numpy.ones((4, 4))
         mask = backend.ops.numpy.ones((4,))
-        backend.set_keras_mask(x, mask)
+        set_keras_mask(x, mask)
         layer(x)
 
         layer(backend.ops.numpy.ones((4, 4)), mask=backend.ops.numpy.ones((4,)))
@@ -1014,10 +1018,10 @@ class LayerTest(testing.TestCase):
         layer = NestedInputMaskedLayer()
         x1 = backend.ops.numpy.ones((4, 4))
         mask1 = backend.ops.numpy.ones((4,))
-        backend.set_keras_mask(x1, mask1)
+        set_keras_mask(x1, mask1)
         x2 = backend.ops.numpy.ones((4, 4))
         mask2 = backend.ops.numpy.ones((4,))
-        backend.set_keras_mask(x2, mask2)
+        set_keras_mask(x2, mask2)
         layer([x1, x2])
 
         layer(
@@ -1054,13 +1058,13 @@ class LayerTest(testing.TestCase):
         layer = PositionalNestedInputsMaskedLayer()
         x1_1 = backend.ops.numpy.ones((4, 4))
         mask1 = backend.ops.numpy.ones((4,))
-        backend.set_keras_mask(x1_1, mask1)
+        set_keras_mask(x1_1, mask1)
         x1_2 = backend.ops.numpy.ones((4, 4))
         mask2 = backend.ops.numpy.ones((4,))
-        backend.set_keras_mask(x1_2, mask2)
+        set_keras_mask(x1_2, mask2)
         x2 = backend.ops.numpy.ones((4, 4))
         mask2 = backend.ops.numpy.ones((4,))
-        backend.set_keras_mask(x2, mask2)
+        set_keras_mask(x2, mask2)
         layer((x1_1, x1_2), x2)
         layer(x1=(x1_1, x1_2), x2=x2)
 
@@ -1071,15 +1075,15 @@ class LayerTest(testing.TestCase):
 
             def call(self, x, mask=None):
                 test_obj.assertIsNotNone(mask)
-                backend.set_keras_mask(x, None)  # Unset mask
+                set_keras_mask(x, None)  # Unset mask
                 return x
 
         layer = MaskUnsetDuringCallLayer()
         x = backend.ops.numpy.ones((4, 4))
         mask = backend.ops.numpy.ones((4,))
-        backend.set_keras_mask(x, mask)
+        set_keras_mask(x, mask)
         y = layer(x)
-        self.assertAllClose(backend.get_keras_mask(y), mask)
+        self.assertAllClose(get_keras_mask(y), mask)
 
     def test_masking_with_explicit_kwarg_propagation(self):
         """This test validates that an explicit `mask` kwarg is correctly
@@ -1099,7 +1103,7 @@ class LayerTest(testing.TestCase):
         layer = PassthroughMaskLayer()
         # Create an input tensor WITHOUT an attached mask.
         x = backend.ops.numpy.ones((4, 4))
-        self.assertIsNone(backend.get_keras_mask(x))
+        self.assertIsNone(get_keras_mask(x))
 
         # Create a mask to be passed explicitly.
         explicit_mask = backend.ops.numpy.array([True, True, False, False])
@@ -1112,7 +1116,7 @@ class LayerTest(testing.TestCase):
 
         # Assert that the output tensor 'y' now has the explicit mask attached
         # for propagation to the next layer.
-        self.assertAllClose(backend.get_keras_mask(y), explicit_mask)
+        self.assertAllClose(get_keras_mask(y), explicit_mask)
 
     def test_stateless_call(self):
         class TestLayer(layers.Layer):
@@ -2308,3 +2312,48 @@ class SpecNameWithoutAttributeTest(testing.TestCase):
         restored.load_own_variables(store)
         self.assertAllClose(restored.kernel, layer.kernel)
         self.assertAllClose(restored.bias, layer.bias)
+
+
+def _int4_setter_case(kind, dtype=None):
+    if kind == "dense":
+        layer = layers.Dense(6, dtype=dtype)
+        layer.build((None, 256))
+        x = np.random.default_rng(0).standard_normal((2, 256))
+    elif kind == "einsum":
+        layer = layers.EinsumDense(
+            "ab,bcd->acd", output_shape=(8, 32), bias_axes="d", dtype=dtype
+        )
+        layer.build((None, 256))
+        x = np.random.default_rng(0).standard_normal((2, 256))
+    elif kind == "embedding":
+        layer = layers.Embedding(300, 16, dtype=dtype)
+        layer.build()
+        x = np.array([[1, 2, 299]])
+    else:
+        layer = layers.ReversibleEmbedding(300, 16, dtype=dtype)
+        layer.build()
+        x = np.array([[1, 2, 299]])
+    return layer, x
+
+
+class LegacyInt4PolicySetterTest(testing.TestCase):
+    @parameterized.named_parameters(
+        ("dense", "dense"),
+        ("einsum", "einsum"),
+        ("embedding", "embedding"),
+        ("reversible_embedding", "reversible_embedding"),
+    )
+    def test_bare_int4_policy_builds_what_the_name_builds(self, kind):
+        # The legacy bare "int4" name holds no block size, and a layer built
+        # from it is per-channel. Setting it on a built layer quantizes
+        # per-channel too, so a layer built from the name alone (a
+        # `DTypePolicyMap` reload) loads the store.
+        layer, x = _int4_setter_case(kind)
+        layer.dtype_policy = "int4_from_float32"
+        self.assertEqual(layer.dtype_policy.name, "int4_from_float32")
+        store = {}
+        layer.save_own_variables(store)
+
+        restored, _ = _int4_setter_case(kind, dtype="int4_from_float32")
+        restored.load_own_variables(store)
+        self.assertAllEqual(restored(x), layer(x))

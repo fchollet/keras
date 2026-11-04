@@ -5,7 +5,6 @@ import numpy as np
 from keras.src import backend
 from keras.src.api_export import keras_export
 from keras.src.backend.common import global_state
-from keras.src.random import seed_generator
 from keras.src.utils.module_utils import tensorflow as tf
 
 GLOBAL_RANDOM_SEED = "global_random_seed"
@@ -48,6 +47,8 @@ def set_random_seed(seed):
     Arguments:
         seed: Integer, the random seed to use.
     """
+    from keras.src.random import seed_generator
+
     if not isinstance(seed, int):
         raise ValueError(
             "Expected `seed` argument to be an integer. "

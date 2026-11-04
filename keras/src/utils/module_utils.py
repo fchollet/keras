@@ -104,6 +104,7 @@ tensorflow = LazyModule("tensorflow")
 gfile = LazyModule(
     "tensorflow.io.gfile", pip_name="tensorflow", required_attr="GFile"
 )
+epath = LazyModule("etils.epath", pip_name="etils[epath]", required_attr="Path")
 tensorflow_io = LazyModule("tensorflow_io")
 scipy = LazyModule("scipy")
 jax = LazyModule("jax")

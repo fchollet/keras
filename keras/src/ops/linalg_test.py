@@ -5,6 +5,7 @@ from absl.testing import parameterized
 from keras.src import backend
 from keras.src import ops
 from keras.src import testing
+from keras.src.backend.common import standardize_dtype
 from keras.src.backend.common.keras_tensor import KerasTensor
 from keras.src.ops import linalg
 from keras.src.testing.test_utils import named_product
@@ -547,9 +548,7 @@ class LinalgOpsCorrectnessTest(testing.TestCase):
         _, symbolic_pivots = linalg.LuFactor().symbolic_call(
             KerasTensor((m, n), dtype="float32")
         )
-        self.assertEqual(
-            backend.standardize_dtype(pivots.dtype), symbolic_pivots.dtype
-        )
+        self.assertEqual(standardize_dtype(pivots.dtype), symbolic_pivots.dtype)
 
         m, n = 4, 3
         x = np.random.rand(m, n)
@@ -724,6 +723,11 @@ class LinalgOpsCorrectnessTest(testing.TestCase):
 
         out_symb = linalg.lstsq(a_symb, b_symb)
         self.assertEqual(out_symb.shape, out.shape)
+
+    def test_lstsq_zero_matrix(self):
+        a = np.zeros((3, 3), dtype="float32")
+        b = np.ones((3, 1), dtype="float32")
+        self.assertAllClose(linalg.lstsq(a, b), np.linalg.lstsq(a, b)[0])
 
     def test_matrix_rank(self):
         # Full-rank tall matrix: rank equals number of columns.

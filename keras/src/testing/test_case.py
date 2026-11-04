@@ -163,11 +163,11 @@ class TestCase(parameterized.TestCase):
 
     def assertDType(self, x, dtype, msg=None):
         if hasattr(x, "dtype"):
-            x_dtype = backend.standardize_dtype(x.dtype)
+            x_dtype = standardize_dtype(x.dtype)
         else:
             # If x is a python number
-            x_dtype = backend.standardize_dtype(type(x))
-        standardized_dtype = backend.standardize_dtype(dtype)
+            x_dtype = standardize_dtype(type(x))
+        standardized_dtype = standardize_dtype(dtype)
         default_msg = (
             "The dtype of x does not match the expected one. "
             f"Received: x.dtype={x_dtype} and dtype={dtype}"
@@ -447,7 +447,7 @@ class TestCase(parameterized.TestCase):
             if expected_output_dtype is not None:
 
                 def verify_dtype(expected_dtype, x):
-                    return expected_dtype == backend.standardize_dtype(x.dtype)
+                    return expected_dtype == standardize_dtype(x.dtype)
 
                 dtypes_match = tree.map_structure(
                     verify_dtype, expected_output_dtype, output
@@ -627,8 +627,7 @@ class TestCase(parameterized.TestCase):
                         spec.shape,
                         dtype=(
                             layer.compute_dtype
-                            if layer.autocast
-                            and backend.is_float_dtype(spec.dtype)
+                            if layer.autocast and is_float_dtype(spec.dtype)
                             else spec.dtype
                         ),
                     ),

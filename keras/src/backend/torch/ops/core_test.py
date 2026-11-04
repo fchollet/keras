@@ -13,7 +13,10 @@ from torch.distributed.tensor import DTensor
 from torch.distributed.tensor import Replicate
 
 from keras.src import backend
+from keras.src import layers
+from keras.src import ops
 from keras.src import testing
+from keras.src.backend.common import standardize_dtype
 from keras.src.backend.common.global_state import clear_session
 from keras.src.backend.torch import distribution_lib
 from keras.src.backend.torch.distributed_test_utils import (
@@ -119,6 +122,65 @@ class TorchCoreTest(testing.TestCase):
             dtype="float32",
         )
 
+    def _get_other_device(self):
+        """Returns a device type that is not the type of `get_device()`."""
+        keras_device = get_device().split(":")[0]
+        devices = ["cpu"]
+        if torch.cuda.is_available():
+            devices.append("cuda")
+        if torch.backends.mps.is_available():
+            devices.append("mps")
+        for device in devices:
+            if device != keras_device:
+                return device
+        self.skipTest(
+            f"Needs a device other than `get_device()` ({keras_device!r}). "
+            "This host has no CUDA or MPS device."
+        )
+
+    def _get_inputs_gradient(self, fn, x_value, device):
+        x = torch.tensor(x_value, device=device, requires_grad=True)
+        fn(x).sum().backward()
+        return x.grad
+
+    def test_custom_gradient_on_inputs_device(self):
+        """The gradient is on the device of the input, not `get_device()`."""
+        other_device = self._get_other_device()
+
+        @ops.custom_gradient
+        def scaled_square(x):
+            def grad_fn(*args, upstream=None):
+                if upstream is None:
+                    (upstream,) = args
+                return ops.multiply(upstream, ops.multiply(3.0, x))
+
+            return ops.square(x), grad_fn
+
+        x_value = np.arange(6, dtype="float32").reshape(2, 3)
+        grad = self._get_inputs_gradient(scaled_square, x_value, other_device)
+        expected = self._get_inputs_gradient(
+            scaled_square, x_value, get_device()
+        )
+        self.assertEqual(grad.device.type, other_device)
+        # The custom gradient is 3 * x, not the autodiff gradient 2 * x.
+        self.assertAllClose(grad, 3.0 * x_value)
+        self.assertAllClose(grad, expected)
+
+    @parameterized.named_parameters(("int8", "int8"), ("int4", "int4"))
+    def test_quantized_dense_inputs_gradient_on_inputs_device(self, mode):
+        """The quantized forward uses a custom gradient for the inputs."""
+        other_device = self._get_other_device()
+        layer = layers.Dense(8)
+        layer.build((None, 16))
+        layer.quantize(mode)
+
+        x_value = np.random.RandomState(0).standard_normal((2, 16))
+        x_value = x_value.astype("float32")
+        grad = self._get_inputs_gradient(layer, x_value, other_device)
+        expected = self._get_inputs_gradient(layer, x_value, get_device())
+        self.assertEqual(grad.device.type, other_device)
+        self.assertAllClose(grad, expected)
+
     def test_slice_fast_path_accepts_symint(self):
         """slice fast path should accept SymInt without crashing."""
         x = torch.arange(24).reshape(2, 3, 4)
@@ -166,6 +228,82 @@ class TorchCoreTest(testing.TestCase):
         # would have failed export above or fixed the first output dim to 2.
         out = ep.module()(torch.arange(12).reshape(3, 4))
         self.assertEqual(tuple(out.shape), (3, 2))
+
+    @parameterized.parameters(((3,),), ((2, 3),))
+    def test_custom_gradient_single_output(self, shape):
+        """A result with no `grad_fn` is the output and has no gradient."""
+        calls = 0
+
+        @torch_core.custom_gradient
+        def triple(x):
+            nonlocal calls
+            calls += 1
+            return x * 3.0
+
+        x = torch.ones(shape, requires_grad=True)
+        y = triple(x)
+        self.assertEqual(calls, 1)
+        self.assertEqual(tuple(y.shape), shape)
+        self.assertAllClose(y, np.full(shape, 3.0))
+        with self.assertRaisesRegex(ValueError, "grad_fn must be provided"):
+            y.sum().backward()
+
+
+@pytest.mark.skipif(
+    backend.backend() != "torch", reason="Requires torch backend"
+)
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="MPS device not available"
+)
+class TorchCoreMpsTest(testing.TestCase):
+    def test_convert_to_tensor_downcasts_ndarray_on_mps(self):
+        x = np.ones(3, dtype=np.float64)
+        with backend.device_scope("mps"):
+            out = convert_to_tensor(x)
+        self.assertEqual(standardize_dtype(out.dtype), "float32")
+
+        x = np.ones(3, dtype=np.complex128)
+        with backend.device_scope("mps"):
+            out = convert_to_tensor(x)
+        self.assertEqual(standardize_dtype(out.dtype), "complex64")
+
+    def test_convert_to_tensor_downcasts_sequence_on_mps(self):
+        x = [np.float64(1.0), np.float64(2.0)]
+        with backend.device_scope("mps"):
+            out = convert_to_tensor(x)
+        self.assertEqual(standardize_dtype(out.dtype), "float32")
+
+    def test_convert_to_tensor_downcasts_torch_tensor_on_mps(self):
+        x = torch.ones(3, dtype=torch.float64)
+        with backend.device_scope("mps"):
+            out = convert_to_tensor(x)
+        self.assertEqual(standardize_dtype(out.dtype), "float32")
+
+    def test_convert_to_tensor_meta_tensor_on_mps(self):
+        x = torch.empty(3, dtype=torch.float64, device="meta")
+        with backend.device_scope("mps"):
+            out = convert_to_tensor(x)
+            self.assertEqual(standardize_dtype(out.dtype), "float32")
+            out = convert_to_tensor(x, dtype="float32")
+            self.assertEqual(standardize_dtype(out.dtype), "float32")
+
+    def test_convert_to_tensor_explicit_float64_raises_on_mps(self):
+        x = np.ones(3, dtype=np.float64)
+        with backend.device_scope("mps"):
+            with self.assertRaises((RuntimeError, TypeError)):
+                convert_to_tensor(x, dtype="float64")
+
+    def test_convert_to_tensor_explicit_float32_no_downcast(self):
+        x = np.ones(3, dtype=np.float64)
+        with backend.device_scope("mps"):
+            out = convert_to_tensor(x, dtype="float32")
+        self.assertEqual(standardize_dtype(out.dtype), "float32")
+
+    def test_convert_to_tensor_no_downcast_on_cpu(self):
+        x = np.ones(3, dtype=np.float64)
+        with backend.device_scope("cpu"):
+            out = convert_to_tensor(x)
+        self.assertEqual(standardize_dtype(out.dtype), "float64")
 
 
 @pytest.mark.skipif(
@@ -330,6 +468,25 @@ class TorchCoreDistributedTest(TorchDistributedTestMixin, testing.TestCase):
         self.assertIsInstance(nv, np.ndarray)
         self.assertEqual(nv.shape, (2, 2))
         self.assertTrue(np.allclose(nv, 1.0))
+
+    def test_dtensor_variable_repr_leaves_out_value(self):
+        mesh = DeviceMesh(
+            shape=(1,),
+            axis_names=["x"],
+            devices=np.array([distribution_lib.list_devices()[0]]),
+        )
+
+        layout_map = LayoutMap(mesh)
+        layout_map[".*"] = ("x", None)
+        dist = ModelParallel(layout_map=layout_map)
+
+        set_distribution(dist)
+
+        v = Variable(torch.ones((2, 2)))
+
+        self.assertIsInstance(v.value.data, DTensor)
+        self.assertNotIn("value=", repr(v))
+        self.assertIn("shape=(2, 2)", repr(v))
 
     @parameterized.parameters(
         ("callable",),

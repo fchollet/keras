@@ -238,13 +238,11 @@ class LayerBenchmark:
             if self.flat_call_inputs:
                 # Scale by a small factor to avoid zero gradients.
                 label = (
-                    keras.backend.convert_to_numpy(self._keras_layer(*data))
-                    * 1.001
+                    keras.ops.convert_to_numpy(self._keras_layer(*data)) * 1.001
                 )
             else:
                 label = (
-                    keras.backend.convert_to_numpy(self._keras_layer(data))
-                    * 1.001
+                    keras.ops.convert_to_numpy(self._keras_layer(data)) * 1.001
                 )
 
         num_iterations = num_samples // batch_size - 1
