@@ -1893,6 +1893,20 @@ class BinaryFocalCrossentropyTest(testing.TestCase):
             losses.BinaryFocalCrossentropy(name="bfce")
         )
 
+    @pytest.mark.skipif(
+        backend.backend() == "numpy",
+        reason="The NumPy backend clips sigmoid(logits) in binary_crossentropy",
+    )
+    def test_large_logits_do_not_saturate(self):
+        # Confidently wrong logits: the loss must keep growing like |z|
+        # instead of saturating at -log(epsilon) = 16.118.
+        y_true = np.array([[1.0]])
+        logits = np.array([[-50.0]])
+        obj = losses.BinaryFocalCrossentropy(gamma=0.0, from_logits=True)
+        self.assertAllClose(obj(y_true, logits), 50.0, atol=1e-4)
+        obj = losses.BinaryFocalCrossentropy(gamma=2.0, from_logits=True)
+        self.assertAllClose(obj(y_true, logits), 50.0, atol=1e-4)
+
     def test_all_correct_unweighted(self):
         y_true = np.array(
             [
@@ -1998,6 +2012,15 @@ class CategoricalFocalCrossentropyTest(testing.TestCase):
         self.run_class_serialization_test(
             losses.CategoricalFocalCrossentropy(name="cfce")
         )
+
+    def test_large_logits_do_not_saturate(self):
+        # Target logit 20 below the others: -log(p_t) = 20 + log(2 + e^-20).
+        y_true = np.array([[0.0, 0.0, 1.0]])
+        logits = np.array([[0.0, 0.0, -20.0]])
+        obj = losses.CategoricalFocalCrossentropy(
+            alpha=1.0, gamma=0.0, from_logits=True
+        )
+        self.assertAllClose(obj(y_true, logits), 20.0 + np.log(2.0), atol=1e-4)
 
     def test_all_correct_unweighted(self):
         y_true = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype="int64")
@@ -2187,6 +2210,15 @@ class SparseCategoricalFocalCrossentropyTest(testing.TestCase):
         self.assertEqual(config["ignore_class"], 255)
         self.assertEqual(config["axis"], 1)
         self.run_class_serialization_test(loss_obj)
+
+    def test_large_logits_do_not_saturate(self):
+        # Target logit 20 below the others: -log(p_t) = 20 + log(2 + e^-20).
+        y_true = np.array([2])
+        logits = np.array([[0.0, 0.0, -20.0]])
+        obj = losses.SparseCategoricalFocalCrossentropy(
+            alpha=1.0, gamma=0.0, from_logits=True
+        )
+        self.assertAllClose(obj(y_true, logits), 20.0 + np.log(2.0), atol=1e-4)
 
     @parameterized.named_parameters(
         ("probabilities_scalar_alpha", False, 0.25),
