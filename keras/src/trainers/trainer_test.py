@@ -24,6 +24,7 @@ from keras.src.models.model import Trainer
 from keras.src.optimizers.rmsprop import RMSprop
 from keras.src.testing import test_case
 from keras.src.testing.test_utils import named_product
+from keras.src.testing.test_utils import x64_mode_scope
 from keras.src.trainers.data_adapters import py_dataset_adapter
 
 
@@ -2962,3 +2963,21 @@ class JAXTrainerCorrectnessTest(test_case.TestCase, parameterized.TestCase):
                     v.value.sharding for v in model.trainable_variables
                 ]
                 self.assertListEqual(actual_shardings, expected_shardings)
+
+    @parameterized.named_parameters(("one_step", 1), ("two_steps", 2))
+    @pytest.mark.skipif(backend.backend() != "jax", reason="JAX only")
+    def test_fit_evaluate_predict_keep_int64_inputs(self, steps_per_execution):
+        x = np.array([[2**40 + 1], [2**40 + 2]], dtype="int64")
+        y = np.full((2, 1), 2**10, dtype="float32")
+        with x64_mode_scope("explicit_x64"):
+            inputs = layers.Input((1,), dtype="int64")
+            # Keeps only the high bits, which a cut to 32 bits would lose.
+            high_bits = layers.Lambda(lambda t: ops.cast(t // 2**30, "float32"))
+            model = models.Model(inputs, high_bits(inputs))
+            model.compile(loss="mse", steps_per_execution=steps_per_execution)
+
+            history = model.fit(x, y, batch_size=1, verbose=0)
+            self.assertEqual(history.history["loss"], [0.0])
+            self.assertEqual(model.evaluate(x, y, batch_size=1, verbose=0), 0.0)
+            self.assertAllEqual(model.predict(x, batch_size=1, verbose=0), y)
+            self.assertAllEqual(model.predict_on_batch(x), y)

@@ -4,6 +4,7 @@ from keras.src import backend
 from keras.src import ops
 from keras.src import tree
 from keras.src.api_export import keras_export
+from keras.src.backend import config
 from keras.src.backend.common import standardize_dtype
 
 NUM_BATCHES_FOR_TENSOR_SPEC = 2
@@ -564,6 +565,12 @@ def super_batch_iterator(iterator, super_batch, stack_fn=np.stack):
                 def _stack_leaf(*xs):
                     if xs[0] is None:
                         return None
+                    if (
+                        isinstance(xs[0], np.ndarray)
+                        and config.x64_mode() == "explicit_x64"
+                    ):
+                        # `jnp.stack` would cut 64-bit NumPy arrays to 32-bit.
+                        return np.stack(xs)
                     return stack_fn(xs)
 
                 yield tree.map_structure(_stack_leaf, *batches)
