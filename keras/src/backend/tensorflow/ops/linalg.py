@@ -1,8 +1,8 @@
 import tensorflow as tf
 
 from keras.src.backend import config
-from keras.src.backend import standardize_dtype
 from keras.src.backend.common import dtypes
+from keras.src.backend.common import standardize_dtype
 from keras.src.backend.tensorflow.ops.core import cast
 from keras.src.backend.tensorflow.ops.core import convert_to_tensor
 
@@ -235,7 +235,9 @@ def lstsq(a, b, rcond=None):
         else:
             rcond = tf.where(rcond < 0, eps, rcond)
         u, s, vt = svd(a, full_matrices=False)
-        mask = s >= tf.convert_to_tensor(rcond, dtype=s.dtype) * s[0]
+        mask = (s > 0) & (
+            s >= tf.convert_to_tensor(rcond, dtype=s.dtype) * s[0]
+        )
         safe_s = tf.cast(tf.where(mask, s, 1), dtype=a.dtype)
         s_inv = tf.where(mask, 1 / safe_s, 0)[:, tf.newaxis]
         u_t_b = tf.matmul(tf.transpose(tf.math.conj(u)), b)

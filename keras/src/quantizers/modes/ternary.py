@@ -2,7 +2,6 @@ from keras.src import initializers
 from keras.src import ops
 from keras.src.quantizers.geometry import EinsumProjectionGeometry
 from keras.src.quantizers.modes.common import apply_bias_activation
-from keras.src.quantizers.packing import pack_ternary
 from keras.src.quantizers.quantization_config import TernaryQuantizationConfig
 from keras.src.quantizers.quantized_weight import QuantizedWeight
 from keras.src.quantizers.quantized_weight import TernaryTrits
@@ -94,7 +93,8 @@ class TernaryStrategy(QuantizationStrategy):
         # the forward value of its straight-through kernel, so quantizing
         # does not change the layer's outputs).
         kernel_ternary, beta = geometry.ternary_values()
-        packed_kernel, _, _ = pack_ternary(kernel_ternary, axis=-1)
+        layout = TernaryTrits(axis=-1, orig_len=kernel_shape[-1])
+        packed_kernel = layout.pack(kernel_ternary)
         del layer._kernel
         layer.quantized_build(kernel_shape, "ternary")
         layer._kernel.assign(packed_kernel)

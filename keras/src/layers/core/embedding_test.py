@@ -14,6 +14,7 @@ from keras.src import ops
 from keras.src import quantizers
 from keras.src import saving
 from keras.src import testing
+from keras.src.backend.common import standardize_dtype
 from keras.src.quantizers.awq_config import AWQConfig
 from keras.src.quantizers.gptq_config import GPTQConfig
 from keras.src.quantizers.quantization_config import Int4QuantizationConfig
@@ -54,9 +55,7 @@ class EmbeddingTest(test_case.TestCase):
         layer.quantize(mode, config=config)
 
         # Verify weights are quantized
-        self.assertEqual(
-            backend.standardize_dtype(layer._embeddings.dtype), "int8"
-        )
+        self.assertEqual(standardize_dtype(layer._embeddings.dtype), "int8")
         self.assertTrue(hasattr(layer, "embeddings_scale"))
 
         # Verify call works
@@ -401,11 +400,9 @@ class EmbeddingTest(test_case.TestCase):
         # Verify the dtype of the weights.
         # The embeddings's dtype is int8, despite the int4 quantization, because
         # we pack the int4 values into int8.
+        self.assertEqual(standardize_dtype(layer._embeddings.dtype), "int8")
         self.assertEqual(
-            backend.standardize_dtype(layer._embeddings.dtype), "int8"
-        )
-        self.assertEqual(
-            backend.standardize_dtype(layer.embeddings_scale.dtype),
+            standardize_dtype(layer.embeddings_scale.dtype),
             layer.variable_dtype,
         )
 
@@ -493,7 +490,7 @@ class EmbeddingTest(test_case.TestCase):
 
     @parameterized.named_parameters(
         ("int8", "int8_from_float32", 2),
-        ("int4", "int4_from_float32", 4),  # embeddings + scale + zero
+        ("int4", "int4_from_float32", 2),  # embeddings + scale
     )
     def test_quantize_by_setting_dtype_policy(
         self, policy, expected_num_variables
@@ -1090,8 +1087,8 @@ class EmbeddingTest(test_case.TestCase):
             v_cfg = vars_cfg[name]
             self.assertEqual(tuple(v_str.shape), tuple(v_cfg.shape))
             self.assertEqual(
-                backend.standardize_dtype(v_str.dtype),
-                backend.standardize_dtype(v_cfg.dtype),
+                standardize_dtype(v_str.dtype),
+                standardize_dtype(v_cfg.dtype),
             )
             self.assertAllClose(v_str, v_cfg)
 
@@ -1151,9 +1148,7 @@ class EmbeddingTest(test_case.TestCase):
             )
             self.assertIsNotNone(layer.g_idx)
             self.assertEqual(tuple(layer.g_idx.shape), (output_dim,))
-        self.assertEqual(
-            backend.standardize_dtype(layer._embeddings.dtype), "int8"
-        )
+        self.assertEqual(standardize_dtype(layer._embeddings.dtype), "int8")
 
         x = np.array([[1, 2, 3], [4, 5, 6]], dtype="int32")
         self.assertEqual(tuple(layer(x).shape), (2, 3, output_dim))

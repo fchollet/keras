@@ -11,6 +11,7 @@ from absl.testing import parameterized
 
 from keras.src.testing import test_case
 from keras.src.utils import file_utils
+from keras.src.utils.module_utils import LazyModule
 
 
 class PathToStringTest(test_case.TestCase):
@@ -596,6 +597,10 @@ class GetFileTest(test_case.TestCase):
         content = file_utils.listdir(self.temp_dir)
         self.assertIn("sample_file.txt", content)
 
+    def test_walk(self):
+        entries = list(file_utils.walk(self.temp_dir))
+        self.assertEqual(entries, [(self.temp_dir, [], ["sample_file.txt"])])
+
     def test_makedirs_and_rmtree(self):
         new_dir = os.path.join(self.temp_dir, "new_directory")
         file_utils.makedirs(new_dir)
@@ -775,12 +780,68 @@ class IsRemotePathTest(test_case.TestCase):
         self.assertFalse(file_utils.is_remote_path("~/relative/path"))
 
 
-class TestRaiseIfNoGFile(test_case.TestCase):
-    def test_raise_if_no_gfile_raises_correct_message(self):
+class RemotePathTest(test_case.TestCase):
+    # A module that can never be imported, used to hide `gfile` / `epath`.
+    _UNAVAILABLE = LazyModule("keras_test_unavailable_module")
+
+    def test_is_remote_path_or_raise_raises_correct_message(self):
         path = "gs://bucket/some/file.txt"
         expected_error_msg = (
-            "Handling remote paths requires installing TensorFlow "
-            f".*Received path: {path}"
+            r"Handling remote paths requires installing etils\[epath\] "
+            r"\(e\.g\. `pip install keras\[gcs\]`\) or TensorFlow\. "
+            f"Received: path={path}"
         )
-        with self.assertRaisesRegex(ValueError, expected_error_msg):
-            file_utils._raise_if_no_gfile(path)
+        with (
+            patch.object(file_utils, "gfile", self._UNAVAILABLE),
+            patch.object(file_utils, "epath", self._UNAVAILABLE),
+        ):
+            with self.assertRaisesRegex(ValueError, expected_error_msg):
+                file_utils._is_remote_path_or_raise(path)
+            self.assertFalse(
+                file_utils._is_remote_path_or_raise("/local/path/file.txt")
+            )
+
+    def test_epath_remote_path(self):
+        root = self.get_temp_dir()
+        # Send local paths through the remote branch, and hide TensorFlow so
+        # that `epath` is used.
+        with (
+            patch.object(file_utils, "is_remote_path", lambda p: True),
+            patch.object(file_utils, "gfile", self._UNAVAILABLE),
+        ):
+            subdir = file_utils.join(root, "a", "b")
+            self.assertEqual(subdir, os.path.join(root, "a", "b"))
+            self.assertEqual(file_utils.join(subdir, ""), subdir + "/")
+            self.assertEqual(file_utils.join(subdir + "/"), subdir + "/")
+            file_utils.makedirs(subdir)
+            file_utils.makedirs(subdir)  # Tolerates an existing directory.
+            self.assertTrue(file_utils.isdir(subdir))
+
+            src = file_utils.join(subdir, "src.txt")
+            dst = file_utils.join(subdir, "dst.txt")
+            with file_utils.File(src, "w") as f:
+                f.write("new")
+            with file_utils.File(dst, "w") as f:
+                f.write("old")
+            file_utils.copy(src, dst)  # Overwrites.
+            with file_utils.File(dst, "r") as f:
+                self.assertEqual(f.read(), "new")
+            self.assertEqual(
+                sorted(file_utils.listdir(subdir)), ["dst.txt", "src.txt"]
+            )
+            parent = file_utils.join(root, "a")
+            self.assertEqual(
+                [
+                    (dirpath, dirs, sorted(files))
+                    for dirpath, dirs, files in file_utils.walk(parent)
+                ],
+                [
+                    (parent, ["b"], []),
+                    (subdir, [], ["dst.txt", "src.txt"]),
+                ],
+            )
+
+            file_utils.remove(dst)
+            self.assertFalse(file_utils.exists(dst))
+            file_utils.rmtree(parent)
+            self.assertFalse(file_utils.exists(subdir))

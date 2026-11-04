@@ -11,6 +11,7 @@ from keras.src import api_export
 from keras.src import backend
 from keras.src.api_export import keras_export
 from keras.src.backend.common import global_state
+from keras.src.backend.common import standardize_dtype
 from keras.src.saving import object_registration
 from keras.src.saving.keras_saveable import KerasSaveable
 from keras.src.utils import python_utils
@@ -55,10 +56,15 @@ NON_MODELING_APIS = frozenset(
         "keras.utils.get_file",
         "keras.utils.image_dataset_from_directory",
         "keras.utils.load_img",
+        "keras.utils.model_to_dot",
+        "keras.utils.plot_model",
         "keras.utils.register_keras_serializable",
         "keras.utils.save_img",
         "keras.utils.serialize_keras_object",
         "keras.utils.text_dataset_from_directory",
+        "keras.visualization.plot_bounding_box_gallery",
+        "keras.visualization.plot_image_gallery",
+        "keras.visualization.plot_segmentation_mask_gallery",
     }
 )
 
@@ -224,7 +230,7 @@ def serialize_keras_object(obj):
             "class_name": "__tensor__",
             "config": {
                 "value": backend.ops.convert_to_numpy(obj).tolist(),
-                "dtype": backend.standardize_dtype(obj.dtype),
+                "dtype": standardize_dtype(obj.dtype),
             },
         }
     if type(obj).__module__ == np.__name__:
@@ -233,7 +239,7 @@ def serialize_keras_object(obj):
                 "class_name": "__numpy__",
                 "config": {
                     "value": obj.tolist(),
-                    "dtype": backend.standardize_dtype(obj.dtype),
+                    "dtype": standardize_dtype(obj.dtype),
                 },
             }
         else:
@@ -752,7 +758,35 @@ def deserialize_keras_object(
     safe_mode_scope = SafeModeScope(safe_mode)
     with custom_obj_scope, safe_mode_scope:
         try:
-            instance = cls.from_config(inner_config)
+            from keras.src.layers.layer import Layer
+            from keras.src.models.functional import Functional
+
+            if (
+                inspect.isclass(cls)
+                and issubclass(cls, Layer)
+                # Note: Functional models are excluded because their layers
+                # are built right when connecting the nodes and before the
+                # model is even created. So the name of the model is not part
+                # of the name stack when the path is captured.
+                and not issubclass(cls, Functional)
+                and inner_config.get("name")
+            ):
+                # The `build` method wrapper is where the `path` of layers is
+                # captured, which is then used for variable paths.
+                # When a model is constructed from code and `build` is called,
+                # layers and models are built in order from outermost to
+                # innermost, which creates a stack of name scopes for the path.
+                # However, when reconstructing from config, layers and models
+                # are built from innermost to outermost. This is because the
+                # build config was captured and `build_from_config` is called
+                # right below.
+                # In order to recreate the correct name stack, we need a name
+                # scope wrapping `from_config`, which is where nested layers
+                # are constructed and built.
+                with backend.name_scope(inner_config.get("name")):
+                    instance = cls.from_config(inner_config)
+            else:
+                instance = cls.from_config(inner_config)
         except TypeError as e:
             raise TypeError(
                 f"{cls} could not be deserialized properly. Please"

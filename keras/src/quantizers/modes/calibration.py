@@ -1,15 +1,23 @@
-"""Shared chassis for the calibration-based quantization modes.
+"""The calibration-based quantization modes, GPTQ and AWQ.
 
 GPTQ and AWQ allocate the same family of variables, run the same
 dequantize-and-contract forward pass, and speak the same three-part policy
-grammar; they differ only in the code bit-width (which fixes how the
-kernel is packed), in one extra AWQ variable and its inverse scaling, and
-in a handful of message fragments. Those differences are the hooks below.
+grammar. They differ in the code bit-width (which fixes how the kernel is
+packed), in the calibrator class, and in one extra AWQ variable of input
+scales that the quantized weight divides out. `GPTQStrategy` and
+`AWQStrategy`, at the end of this module, declare these differences as
+class attributes.
 """
 
 import math
 
-from keras.src.dtype_policies.dtype_policy_map import DTypePolicyMap
+from keras.src import ops
+from keras.src.dtype_policies.dtype_policy import AWQDTypePolicy
+from keras.src.dtype_policies.dtype_policy import GPTQDTypePolicy
+from keras.src.quantizers.awq import AWQCalibrator
+from keras.src.quantizers.awq_config import AWQConfig
+from keras.src.quantizers.gptq import GPTQCalibrator
+from keras.src.quantizers.gptq_config import GPTQConfig
 from keras.src.quantizers.modes.common import apply_bias_activation
 from keras.src.quantizers.quantized_weight import Int2Quads
 from keras.src.quantizers.quantized_weight import Int4Pairs
@@ -25,6 +33,8 @@ class CalibrationStrategy(QuantizationStrategy):
     geometry_families = ("projection",)
     requires_config = True
     requires_layer_structure = True
+    # The mode's dedicated dtype policy class.
+    policy_cls = None
 
     def quantize(self, layer, config):
         # The quantized values arrive later, so this only allocates the
@@ -36,6 +46,20 @@ class CalibrationStrategy(QuantizationStrategy):
         layer.calibration_pending = True
 
     # --- Config and policy-string surface ---------------------------------
+
+    def policy_from_string(self, mode_str, source_name):
+        return self.policy_cls(mode_str, source_name)
+
+    def config_from_policy(self, policy):
+        name = self.name.upper()
+        raise ValueError(
+            f"Implicitly enabling {name} quantization by setting "
+            f"`dtype_policy` to '{policy.name}' is not supported. "
+            f"{name} requires a calibration dataset and a config object "
+            f"(`{self.config_cls.__name__}`).\n\n"
+            f"Please use the `.quantize('{self.name}', config=...)` method "
+            "on the layer or model instead."
+        )
 
     def _missing_config_error(self):
         return (
@@ -67,19 +91,36 @@ class CalibrationStrategy(QuantizationStrategy):
         policy = layer._own_dtype_policy
         if policy.quantization_mode == self.name:
             return getattr(policy, attr)
-        if isinstance(layer.dtype_policy, DTypePolicyMap):
-            self._on_policy_map_mismatch(policy)
-        raise ValueError(self._resolution_error(attr))
+        raise ValueError(
+            f"For {self.name.upper()} quantization, the {attr} must be "
+            "specified either through a `dtype_policy` of type "
+            f"`{self.policy_cls.__name__}` or the `config` argument. "
+            f"Received: dtype_policy={policy!r}"
+        )
 
-    def _on_policy_map_mismatch(self, policy):
-        """Hook for modes that reject a mismatched `DTypePolicyMap` entry.
+    # --- Calibration run --------------------------------------------------
 
-        Returning lets resolution fall through to `_resolution_error`.
+    # The `Calibrator` class that solves this mode for one layer.
+    calibrator_cls = None
+
+    def calibrate(self, config, structure, filters=None):
+        """Runs this mode's calibration over `structure` and writes back.
+
+        Args:
+            config: The mode's config, with its dataset and tokenizer.
+            structure: Dict with keys `"pre_block_layers"` and
+                `"sequential_blocks"`, as `Model.quantize` resolved it.
+            filters: Optional filters that exclude layers from quantization.
         """
+        # Imported here to avoid an import cycle: `calibration_run` imports
+        # the layers, which import the strategies.
+        from keras.src.quantizers.calibration_run import CalibrationRun
 
-    def _resolution_error(self, attr):
-        """The error raised when a hyperparameter cannot be resolved."""
-        raise NotImplementedError
+        CalibrationRun(self, config, structure, filters).run()
+
+    def finalize_model_quantization(self, model, config, structure, filters):
+        del model
+        self.calibrate(config, structure, filters)
 
     # --- Variables --------------------------------------------------------
 
@@ -100,11 +141,6 @@ class CalibrationStrategy(QuantizationStrategy):
         # marks a live float layer pending after this returns.
         layer.calibration_pending = False
 
-        if len(input_shape) not in (2, 3):
-            raise ValueError(
-                f"{self.name.upper()} quantization only supports 2D or 3D "
-                "kernels."
-            )
         rows, columns = geometry.calibration_rows_columns(input_shape)
 
         bits = self.resolve_weight_bits(layer, config)
@@ -168,9 +204,14 @@ class CalibrationStrategy(QuantizationStrategy):
     ):
         """Installs the calibrated values and retires the float kernel.
 
+        `codes` are the unpacked codes in the kernel's `[in, out]`
+        orientation; they are packed here as `build` lays out the variable.
         `input_scales` go to the `input_scales_name` variable of a mode
         that has one.
         """
+        bits = self.resolve_weight_bits(layer, layer.quantization_config)
+        codes = ops.cast(codes, layer.quantized_kernel.dtype)
+        codes = self._get_pack_layout(bits, codes.shape[-1]).pack(codes)
         del layer._kernel
         layer.quantized_kernel.assign(codes)
         layer.kernel_scale.assign(scale)
@@ -261,3 +302,31 @@ class CalibrationStrategy(QuantizationStrategy):
         )
         y = geometry.contract(inputs, W)
         return apply_bias_activation(layer, y)
+
+
+class GPTQStrategy(CalibrationStrategy):
+    """GPTQ post-training quantization (calibration-based, 2/3/4/8-bit).
+
+    GPTQ quantizes the kernel one column at a time and corrects the columns
+    still to come with the inverse Hessian of the layer's inputs.
+    """
+
+    name = "gptq"
+    config_cls = GPTQConfig
+    policy_cls = GPTQDTypePolicy
+    calibrator_cls = GPTQCalibrator
+
+
+class AWQStrategy(CalibrationStrategy):
+    """AWQ post-training quantization (activation-aware, 4-bit).
+
+    AWQ uses 4-bit quantization with per-channel AWQ scales that protect
+    salient weights based on activation magnitudes.
+    """
+
+    name = "awq"
+    config_cls = AWQConfig
+    policy_cls = AWQDTypePolicy
+    calibrator_cls = AWQCalibrator
+    # Per-input-row scales from the activation magnitudes.
+    input_scales_name = "awq_scales"

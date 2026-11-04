@@ -54,7 +54,7 @@ def _dot_product_attention(
 
     def _apply_masks(logits, mask, is_causal):
         def _get_large_negative(dtype):
-            dtype = backend.standardize_dtype(dtype)
+            dtype = standardize_dtype(dtype)
             if dtype == "float16":
                 val = 65500.0
             else:
@@ -441,7 +441,7 @@ class NNOpsDynamicShapeTest(testing.TestCase):
 
         x = np.arange(5)
         out = knn.multi_hot(x, 5, axis=0, dtype=dtype, sparse=sparse)
-        self.assertEqual(backend.standardize_dtype(out.dtype), dtype)
+        self.assertEqual(standardize_dtype(out.dtype), dtype)
         self.assertSparse(out, sparse)
 
     def test_conv(self):
@@ -801,7 +801,7 @@ class NNOpsDynamicShapeTest(testing.TestCase):
 
         x = np.arange(5)
         out = knn.one_hot(x, 5, axis=0, dtype=dtype, sparse=sparse)
-        self.assertEqual(backend.standardize_dtype(out.dtype), dtype)
+        self.assertEqual(standardize_dtype(out.dtype), dtype)
         self.assertSparse(out, sparse)
 
     def test_moments(self):
@@ -1877,9 +1877,7 @@ class NNOpsCorrectnessTest(testing.TestCase):
             KerasTensor((2,), dtype="float32"),
             KerasTensor((2,), dtype="float32"),
         )
-        self.assertEqual(
-            backend.standardize_dtype(out.dtype), symbolic_out.dtype
-        )
+        self.assertEqual(standardize_dtype(out.dtype), symbolic_out.dtype)
 
     def test_sparsemax(self):
         x = np.array([-0.5, 0, 1, 2, 3], dtype=np.float32)
@@ -2611,7 +2609,7 @@ class NNOpsCorrectnessTest(testing.TestCase):
         expected = -(t * np.log(probs) + (1 - t) * np.log(1 - probs))
         tol = {"float32": 1e-6, "float16": 1e-3, "bfloat16": 1e-2}[output_dtype]
         self.assertAllClose(result, expected, atol=tol, rtol=tol)
-        self.assertEqual(backend.standardize_dtype(result.dtype), output_dtype)
+        self.assertEqual(standardize_dtype(result.dtype), output_dtype)
 
     @parameterized.parameters(
         ("int32", True), ("int32", False), ("uint8", False), ("bool", False)
@@ -2647,7 +2645,7 @@ class NNOpsCorrectnessTest(testing.TestCase):
         result = knn.binary_crossentropy(
             target, output, from_logits=from_logits
         )
-        self.assertEqual(backend.standardize_dtype(result.dtype), output_dtype)
+        self.assertEqual(standardize_dtype(result.dtype), output_dtype)
 
     def test_categorical_crossentropy(self):
         target = np.array(

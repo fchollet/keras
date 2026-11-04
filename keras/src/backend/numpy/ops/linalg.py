@@ -1,8 +1,8 @@
 import numpy as np
 import scipy.linalg as sl
 
-from keras.src.backend import standardize_dtype
 from keras.src.backend.common import dtypes
+from keras.src.backend.common import standardize_dtype
 from keras.src.backend.common.backend_utils import standardize_axis_for_numpy
 from keras.src.backend.numpy.ops.core import convert_to_tensor
 

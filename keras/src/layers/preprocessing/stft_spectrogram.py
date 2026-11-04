@@ -6,6 +6,7 @@ from keras.src import initializers
 from keras.src import layers
 from keras.src import ops
 from keras.src.api_export import keras_export
+from keras.src.backend.common import standardize_dtype
 from keras.src.utils.module_utils import scipy
 
 
@@ -266,7 +267,7 @@ class STFTSpectrogram(layers.Layer):
 
         outputs = ops.conv(
             inputs,
-            ops.cast(kernel, backend.standardize_dtype(inputs.dtype)),
+            ops.cast(kernel, standardize_dtype(inputs.dtype)),
             padding=self.padding,
             strides=self._frame_step,
             data_format=self.data_format,
@@ -289,7 +290,7 @@ class STFTSpectrogram(layers.Layer):
 
     def call(self, inputs):
         dtype = inputs.dtype
-        if backend.standardize_dtype(dtype) not in {
+        if standardize_dtype(dtype) not in {
             "float16",
             "float32",
             "float64",

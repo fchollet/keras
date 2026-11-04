@@ -6,6 +6,7 @@ from absl.testing import parameterized
 from keras.src import backend
 from keras.src import layers
 from keras.src import testing
+from keras.src.backend.common import standardize_dtype
 from keras.src.testing.test_utils import named_product
 
 
@@ -117,26 +118,18 @@ class HashedCrossingTest(testing.TestCase):
         input_1, input_2 = np.array([1]), np.array([1])
 
         layer = layers.HashedCrossing(num_bins=2)
-        output_dtype = backend.standardize_dtype(
-            layer((input_1, input_2)).dtype
-        )
+        output_dtype = standardize_dtype(layer((input_1, input_2)).dtype)
         self.assertEqual(output_dtype, "int64")
         layer = layers.HashedCrossing(num_bins=2, dtype="int32")
-        output_dtype = backend.standardize_dtype(
-            layer((input_1, input_2)).dtype
-        )
+        output_dtype = standardize_dtype(layer((input_1, input_2)).dtype)
         self.assertEqual(output_dtype, "int32")
         layer = layers.HashedCrossing(num_bins=2, output_mode="one_hot")
-        output_dtype = backend.standardize_dtype(
-            layer((input_1, input_2)).dtype
-        )
+        output_dtype = standardize_dtype(layer((input_1, input_2)).dtype)
         self.assertEqual(output_dtype, "float32")
         layer = layers.HashedCrossing(
             num_bins=2, output_mode="one_hot", dtype="float64"
         )
-        output_dtype = backend.standardize_dtype(
-            layer((input_1, input_2)).dtype
-        )
+        output_dtype = standardize_dtype(layer((input_1, input_2)).dtype)
         self.assertEqual(output_dtype, "float64")
 
     def test_non_list_input_fails(self):

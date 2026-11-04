@@ -8,6 +8,7 @@ from keras.src import layers
 from keras.src import models
 from keras.src import ops
 from keras.src import testing
+from keras.src.backend.common import standardize_dtype
 from keras.src.layers.preprocessing import feature_space
 from keras.src.saving import saving_api
 
@@ -191,14 +192,10 @@ class FeatureSpaceTest(testing.TestCase):
         self.assertIsInstance(out, dict)
         self.assertLen(out, 7)
         self.assertEqual(out["int_2"].shape, (1,))
-        self.assertTrue(
-            backend.standardize_dtype(out["int_2"].dtype).startswith("int")
-        )
+        self.assertTrue(standardize_dtype(out["int_2"].dtype).startswith("int"))
         self.assertEqual(out["int_1_X_int_2"].shape, (1,))
         self.assertTrue(
-            backend.standardize_dtype(out["int_1_X_int_2"].dtype).startswith(
-                "int"
-            )
+            standardize_dtype(out["int_1_X_int_2"].dtype).startswith("int")
         )
 
     def test_basic_usage(self):
@@ -322,17 +319,13 @@ class FeatureSpaceTest(testing.TestCase):
         self.assertLen(out, 10)
         self.assertEqual(out["string_1"].shape, (1,))
         self.assertTrue(
-            backend.standardize_dtype(out["string_1"].dtype).startswith("int")
+            standardize_dtype(out["string_1"].dtype).startswith("int")
         )
         self.assertEqual(out["int_2"].shape, (1,))
-        self.assertTrue(
-            backend.standardize_dtype(out["int_2"].dtype).startswith("int")
-        )
+        self.assertTrue(standardize_dtype(out["int_2"].dtype).startswith("int"))
         self.assertEqual(out["string_2_X_int_2"].shape, (1,))
         self.assertTrue(
-            backend.standardize_dtype(out["string_2_X_int_2"].dtype).startswith(
-                "int"
-            )
+            standardize_dtype(out["string_2_X_int_2"].dtype).startswith("int")
         )
 
     @pytest.mark.skipif(
