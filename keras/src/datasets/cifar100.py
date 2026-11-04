@@ -59,7 +59,10 @@ def load_data(label_mode="fine"):
         )
 
     dirname = "cifar-100-python-target"
-    origin = "https://www.cs.toronto.edu/~kriz/cifar-100-python.tar.gz"
+    origin = (
+        "https://storage.googleapis.com/tensorflow/tf-keras-datasets/"
+        "cifar-100-python.tar.gz"
+    )
     path = get_file(
         fname=dirname,
         origin=origin,

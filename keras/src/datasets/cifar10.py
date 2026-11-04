@@ -66,7 +66,10 @@ def load_data():
     discussions in the research literature on CIFAR-10 label quality.
     """
     dirname = "cifar-10-batches-py-target"
-    origin = "https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz"
+    origin = (
+        "https://storage.googleapis.com/tensorflow/tf-keras-datasets/"
+        "cifar-10-python.tar.gz"
+    )
     path = get_file(
         fname=dirname,
         origin=origin,
