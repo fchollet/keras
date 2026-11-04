@@ -1621,9 +1621,11 @@ class Layer(BackendLayer, Operation):
             store[str(idx)] = value
             idx += 1
 
-    def _load_serialized_variables(self, store, name):
+    def _load_serialized_variables(
+        self, store, name, check_variable_count=True
+    ):
         """Loads the variables `_save_serialized_variables` saved."""
-        if not self.lora_enabled:
+        if not self.lora_enabled and check_variable_count:
             self._check_load_own_variables(store)
         if not self.built:
             return

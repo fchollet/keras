@@ -64,6 +64,18 @@ class EinsumDense(Layer):
             trainable matrices) during the forward pass. The delta is scaled by
             `lora_alpha / lora_rank`, allowing you to fine-tune the strength of
             the LoRA adjustment independently of `lora_rank`.
+        dora_rank: Optional integer. If set, the layer's forward pass
+            will implement DoRA (Weight-Decomposed Low-Rank Adaptation)
+            with the provided rank. DoRA decomposes the layer's kernel
+            into magnitude and direction components and applies LoRA
+            to the direction component. This can improve the learning
+            capacity of LoRA. You can also enable DoRA on an existing
+            `EinsumDense` layer by calling `layer.enable_dora(rank)`.
+        dora_alpha: Optional integer. If set, this parameter scales the
+            low-rank adaptation delta during the forward pass. The delta
+            is scaled by `dora_alpha / dora_rank`, allowing you to fine-tune
+            the strength of the DoRA adjustment independently of `dora_rank`.
+        quantization_config: Optional configuration object for quantization.
         **kwargs: Base layer keyword arguments, such as `name` and `dtype`.
 
     Examples:
@@ -132,6 +144,8 @@ class EinsumDense(Layer):
         bias_constraint=None,
         lora_rank=None,
         lora_alpha=None,
+        dora_rank=None,
+        dora_alpha=None,
         quantization_config=None,
         **kwargs,
     ):
@@ -151,7 +165,14 @@ class EinsumDense(Layer):
         self.bias_constraint = constraints.get(bias_constraint)
         self.lora_rank = lora_rank
         self.lora_alpha = lora_alpha if lora_alpha is not None else lora_rank
+        self.dora_rank = dora_rank
+        self.dora_alpha = dora_alpha if dora_alpha is not None else dora_rank
+        if self.lora_rank and self.dora_rank:
+            raise ValueError(
+                "Only one of `lora_rank` or `dora_rank` can be set."
+            )
         self.lora_enabled = False
+        self.dora_enabled = False
         self.quantization_config = quantization_config
 
     def _update_kernel_initializer(self, input_axes, output_axes):
@@ -235,6 +256,8 @@ class EinsumDense(Layer):
         self.built = True
         if self.lora_rank:
             self.enable_lora(self.lora_rank, lora_alpha=self.lora_alpha)
+        if self.dora_rank:
+            self.enable_dora(self.dora_rank, dora_alpha=self.dora_alpha)
 
     @property
     def kernel(self):
@@ -261,6 +284,18 @@ class EinsumDense(Layer):
                 ),
                 dtype=self.compute_dtype,
             )
+        elif self.dora_enabled:
+            lora_delta = (self.dora_alpha / self.dora_rank) * ops.matmul(
+                self.dora_kernel_a, self.dora_kernel_b
+            )
+            combined_kernel = ops.add(kernel, lora_delta)
+            axis = tuple(range(len(kernel.shape) - 1))
+            norm = ops.sqrt(ops.sum(ops.square(combined_kernel), axis=axis))
+            kernel = self.dora_magnitude * ops.divide_no_nan(
+                combined_kernel, norm
+            )
+            kernel = ops.cast(kernel, dtype=self.compute_dtype)
+
         return kernel
 
     def compute_output_shape(self, input_shape):
@@ -301,6 +336,8 @@ class EinsumDense(Layer):
             raise ValueError(
                 "lora is already enabled. This can only be done once per layer."
             )
+        if self.dora_enabled:
+            raise ValueError("dora is already enabled. Cannot enable LoRA.")
         if self.quantization_mode == "gptq":
             raise NotImplementedError(
                 "lora is not currently supported with GPTQ quantization."
@@ -332,11 +369,88 @@ class EinsumDense(Layer):
         self.lora_rank = rank
         self.lora_alpha = lora_alpha if lora_alpha is not None else rank
 
+    def enable_dora(
+        self,
+        rank,
+        dora_alpha=None,
+        a_initializer="he_uniform",
+        b_initializer="zeros",
+    ):
+        if self.kernel_constraint:
+            raise ValueError(
+                "DoRA is incompatible with kernel constraints. "
+                "In order to enable dora on this layer, remove the "
+                "`kernel_constraint` argument."
+            )
+        if not self.built:
+            raise ValueError(
+                "Cannot enable dora on a layer that isn't yet built."
+            )
+        if self.lora_enabled:
+            raise ValueError("LoRA is already enabled. Cannot enable DoRA.")
+        if self.dora_enabled:
+            raise ValueError(
+                "dora is already enabled. This can only be done once per layer."
+            )
+        if self.quantization_mode is not None:
+            raise NotImplementedError(
+                "DoRA is not currently supported with quantized layers."
+            )
+        self._tracker.unlock()
+        if self.quantization_mode == "int4":
+            kernel_shape_for_lora = tuple(self.original_kernel_shape)
+        else:
+            kernel_shape_for_lora = self.kernel.shape
+
+        self.dora_kernel_a = self.add_weight(
+            name="dora_kernel_a",
+            shape=(kernel_shape_for_lora[:-1] + (rank,)),
+            initializer=initializers.get(a_initializer),
+            dtype="float32",
+            regularizer=self.kernel_regularizer,
+        )
+        self.dora_kernel_b = self.add_weight(
+            name="dora_kernel_b",
+            shape=(rank, kernel_shape_for_lora[-1]),
+            initializer=initializers.get(b_initializer),
+            dtype="float32",
+            regularizer=self.kernel_regularizer,
+        )
+
+        # Initialize Magnitude Vector
+        # We reduce all axes except the last one
+        axis = tuple(range(len(self.kernel.shape) - 1))
+        initial_magnitude = ops.sqrt(
+            ops.sum(ops.square(self.kernel), axis=axis)
+        )
+        self.dora_magnitude = self.add_weight(
+            name="dora_magnitude",
+            shape=(kernel_shape_for_lora[-1],),
+            initializer=initializers.Constant(initial_magnitude),
+            dtype="float32",
+            regularizer=self.kernel_regularizer,
+        )
+
+        self._kernel.trainable = False
+        self._tracker.lock()
+        self.dora_enabled = True
+        self.dora_rank = rank
+        self.dora_alpha = dora_alpha if dora_alpha is not None else rank
+
     def save_own_variables(self, store):
         self._save_serialized_variables(store, "kernel")
 
     def load_own_variables(self, store):
-        self._load_serialized_variables(store, "kernel")
+        self._load_serialized_variables(
+            store, "kernel", check_variable_count=not self.dora_enabled
+        )
+        if self.dora_enabled:
+            self.dora_kernel_a.assign(ops.zeros(self.dora_kernel_a.shape))
+            self.dora_kernel_b.assign(ops.zeros(self.dora_kernel_b.shape))
+            axis = tuple(range(len(self._kernel.shape) - 1))
+            self.dora_magnitude.assign(
+                ops.sqrt(ops.sum(ops.square(self._kernel), axis=axis))
+            )
 
     def get_config(self):
         base_config = super().get_config()
@@ -365,6 +479,9 @@ class EinsumDense(Layer):
         if self.lora_rank:
             config["lora_rank"] = self.lora_rank
             config["lora_alpha"] = self.lora_alpha
+        if self.dora_rank:
+            config["dora_rank"] = self.dora_rank
+            config["dora_alpha"] = self.dora_alpha
         return {**base_config, **config}
 
     @classmethod
@@ -436,28 +553,15 @@ class EinsumDense(Layer):
         return EinsumProjectionGeometry(self)
 
     def _get_kernel_scale_shape(self, kernel_shape):
-        """Get the shape of the kernel scale tensor.
-
-        The kernel scale tensor is used to scale the kernel tensor.
-        The shape of the kernel scale tensor is the same as the shape of the
-        kernel tensor, but with the reduced axes set to 1, and the transpose
-        axes set to the original axes.
-
-        Args:
-            kernel_shape: The shape of the kernel tensor.
-
-        Returns:
-            The shape of the kernel scale tensor.
-        """
+        """Get the shape of the kernel scale tensor."""
         kernel_scale_shape = np.array(kernel_shape)
         kernel_scale_shape[self._kernel_reduced_axes] = 1
-
         kernel_scale_shape = kernel_scale_shape[self._kernel_transpose_axes]
         kernel_scale_shape = kernel_scale_shape.tolist()
-        for a in sorted(self._kernel_expand_axes):
-            kernel_scale_shape.insert(a, 1)
-        for a in sorted(self._kernel_squeeze_axes, reverse=True):
-            kernel_scale_shape.pop(a)
+        for axis in sorted(self._kernel_expand_axes):
+            kernel_scale_shape.insert(axis, 1)
+        for axis in sorted(self._kernel_squeeze_axes, reverse=True):
+            kernel_scale_shape.pop(axis)
         return kernel_scale_shape
 
     def _adjust_scale_for_dequant(self, scale):

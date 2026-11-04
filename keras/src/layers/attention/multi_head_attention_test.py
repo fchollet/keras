@@ -904,6 +904,78 @@ class MultiHeadAttentionTest(testing.TestCase):
         model.load_weights(temp_filepath)
         self.assertAllClose(model.predict(x), new_model.predict(x))
 
+    @pytest.mark.requires_trainable_backend
+    def test_dora(self):
+        layer = layers.MultiHeadAttention(
+            num_heads=3,
+            key_dim=8,
+            use_bias=False,
+            use_gate=True,
+        )
+        query = np.random.random((1, 2, 2))
+        key = np.random.random((1, 2, 2))
+        value = np.random.random((1, 2, 2))
+        layer(query, key, value)  # build
+
+        layer.query_dense.enable_dora(2)
+        layer.key_dense.enable_dora(2)
+        layer.value_dense.enable_dora(2)
+
+        # Try eager call
+        x = {
+            "query": query,
+            "key": key,
+            "value": value,
+        }
+        y = np.random.random((1, 2, 2))
+        _ = layer(**x)
+
+        # Try calling fit()
+        inputs = {
+            "query": layers.Input((2, 2)),
+            "key": layers.Input((2, 2)),
+            "value": layers.Input((2, 2)),
+        }
+        outputs = layer(inputs["query"], inputs["key"], inputs["value"])
+        model = models.Model(inputs, outputs)
+        model.compile(optimizer="sgd", loss="mse")
+        model.fit(x, y)
+
+        # Try saving and reloading the model
+        temp_filepath = os.path.join(self.get_temp_dir(), "dora_model.keras")
+        model.save(temp_filepath)
+
+        new_model = saving.load_model(temp_filepath)
+        self.assertAllClose(model.predict(x), new_model.predict(x))
+
+        # Try saving and reloading the model's weights only
+        temp_filepath = os.path.join(
+            self.get_temp_dir(), "dora_model.weights.h5"
+        )
+        model.save_weights(temp_filepath)
+
+        # Load the file into a fresh, non-dora model
+        inputs = {
+            "query": layers.Input((2, 2)),
+            "key": layers.Input((2, 2)),
+            "value": layers.Input((2, 2)),
+        }
+        outputs = layers.MultiHeadAttention(
+            num_heads=3,
+            key_dim=8,
+            use_bias=False,
+            use_gate=True,
+        )(inputs["query"], inputs["key"], inputs["value"])
+        new_model = models.Model(inputs, outputs)
+
+        new_model.load_weights(temp_filepath)
+        self.assertAllClose(model.predict(x), new_model.predict(x))
+
+        # Try loading a normal checkpoint into a dora model
+        new_model.save_weights(temp_filepath)
+        model.load_weights(temp_filepath)
+        self.assertAllClose(model.predict(x), new_model.predict(x))
+
     @parameterized.parameters([((1, 2, 3),), ((2, 3, 5),)])
     def test_symbolic_return_attention_scores(self, shape):
         mha = layers.MultiHeadAttention(num_heads=4, key_dim=2)
