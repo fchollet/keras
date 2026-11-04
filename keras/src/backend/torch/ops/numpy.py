@@ -448,6 +448,16 @@ def append(x1, x2, axis=None):
     return torch.cat((x1, x2), dim=axis)
 
 
+def _is_empty_range(start, stop, step):
+    # Only decidable for Python / NumPy scalars; others go to the backend.
+    if not builtins.all(
+        isinstance(v, (int, float, np.integer, np.floating))
+        for v in (start, stop, step)
+    ):
+        return False
+    return (step > 0 and start >= stop) or (step < 0 and start <= stop)
+
+
 def arange(start, stop=None, step=None, dtype=None):
     if dtype is None:
         dtypes_to_resolve = [getattr(start, "dtype", type(start))]
@@ -461,6 +471,9 @@ def arange(start, stop=None, step=None, dtype=None):
         start, stop = 0, start
     if step is None:
         step = 1
+    if _is_empty_range(start, stop, step):
+        # `torch.arange` raises on an empty range, NumPy returns an empty array.
+        return torch.zeros((0,), dtype=dtype, device=get_device())
     return torch.arange(
         start, stop, step=step, dtype=dtype, device=get_device()
     )

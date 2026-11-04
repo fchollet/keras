@@ -842,6 +842,16 @@ def append(x1, x2, axis=None):
         return tf.concat([x1, x2], axis=axis)
 
 
+def _is_empty_range(start, stop, step):
+    # Only decidable for Python / NumPy scalars; others go to the backend.
+    if not builtins.all(
+        isinstance(v, (int, float, np.integer, np.floating))
+        for v in (start, stop, step)
+    ):
+        return False
+    return (step > 0 and start >= stop) or (step < 0 and start <= stop)
+
+
 def arange(start, stop=None, step=None, dtype=None):
     if dtype is None:
         dtypes_to_resolve = [getattr(start, "dtype", type(start))]
@@ -853,6 +863,10 @@ def arange(start, stop=None, step=None, dtype=None):
     dtype = standardize_dtype(dtype)
     if step is None:
         step = 1
+    range_start, range_stop = (0, start) if stop is None else (start, stop)
+    if _is_empty_range(range_start, range_stop, step):
+        # `tf.range` raises on an empty range, NumPy returns an empty array.
+        return tf.zeros((0,), dtype=dtype)
     try:
         out = tf.range(start, stop, delta=step, dtype=dtype)
     except tf.errors.NotFoundError:
