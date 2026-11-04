@@ -25,7 +25,7 @@ jobs:
 
     steps:
       - name: Checkout ${{ github.ref }}
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
 
@@ -43,15 +43,14 @@ jobs:
       - name: Run Tests
         shell: bash
         run: |
-          skipped=()
+          ignored_files=()
           while IFS= read -r line; do
             case "$line" in
-              "" | "#"*) ;;
-              *::*) skipped+=(--deselect "$line") ;;
-              *) skipped+=(--ignore "$line") ;;
+              "" | "#"* | *::*) ;;
+              *) ignored_files+=(--ignore "$line") ;;
             esac
           done < .github/workflows/config/tf_free_ignored_tests.txt
           pytest keras -n 12 --dist loadfile \
             --ignore keras/src/applications \
             --ignore keras/src/wrappers \
-            "${skipped[@]}"
+            "${ignored_files[@]}"
