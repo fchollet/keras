@@ -3870,6 +3870,8 @@ def corrcoef(x):
 
     if tf.rank(x) == 0:
         return tf.constant(float("nan"), dtype=config.floatx())
+    if x.shape.rank == 1:
+        return tf.reshape(corrcoef(x[tf.newaxis, :]), [])
 
     mean = tf.reduce_mean(x, axis=-1, keepdims=True)
     x_centered = x - mean
