@@ -326,6 +326,15 @@ class StepCount(Callback):
 
 
 class TestTrainer(testing.TestCase):
+    def test_evaluate_without_compile_raises(self):
+        model = ExampleModel(units=3)
+        x = np.ones((4, 4), dtype="float32")
+        y = np.ones((4, 3), dtype="float32")
+        with self.assertRaisesRegex(
+            ValueError, r"You must call `compile\(\)` before using the model"
+        ):
+            model.evaluate(x, y, verbose=0)
+
     @pytest.mark.requires_trainable_backend
     def test_metric_tracking(self):
         class ModelWithMetric(Trainer, layers.Dense):

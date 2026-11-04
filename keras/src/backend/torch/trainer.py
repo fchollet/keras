@@ -498,6 +498,7 @@ class Trainer(BaseTrainer):
         return_dict=False,
         **kwargs,
     ):
+        self._assert_compile_called("evaluate")
         # TODO: respect compiled trainable state
         use_cached_eval_dataset = kwargs.pop("_use_cached_eval_dataset", False)
         if kwargs:
