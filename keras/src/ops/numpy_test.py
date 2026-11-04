@@ -5516,11 +5516,14 @@ class NumpyTwoInputOpsCorrectnessTest(testing.TestCase):
         self.assertAllClose(knp.vdot(x, y), np.vdot(x, y))
         self.assertAllClose(knp.Vdot()(x, y), np.vdot(x, y))
 
-        # Multi-dimensional inputs are flattened.
+        # Multi-dimensional and 0-D inputs are flattened.
         x = np.arange(6.0).reshape(2, 3)
         y = np.arange(6.0, 12.0).reshape(3, 2)
         self.assertAllClose(knp.vdot(x, y), np.vdot(x, y))
         self.assertAllClose(knp.Vdot()(x, y), np.vdot(x, y))
+
+        x, y = np.array(2.0), np.array(3.0)
+        self.assertAllClose(knp.vdot(x, y), np.vdot(x, y))
 
     def test_inner(self):
         x = np.array([1.0, 2.0, 3.0])
