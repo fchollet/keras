@@ -1,0 +1,55 @@
+name: TF-free Tests
+
+on:
+  workflow_call:
+    inputs:
+      timeout:
+        description: "Per-job timeout in minutes"
+        type: number
+        default: 120
+
+permissions:
+  contents: read
+
+jobs:
+  run_tf_free_tests:
+    container:
+      image: python:3.11-slim
+
+    name: Run tests on CPU without TensorFlow (jax)
+    runs-on: linux-x86-n4-16
+    timeout-minutes: ${{ inputs.timeout }}
+
+    env:
+      KERAS_HOME: .github/workflows/config/jax
+
+    steps:
+      - name: Checkout ${{ github.ref }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Python dependencies
+        run: |
+          pip install -r requirements.txt
+          pip uninstall -y keras tensorflow tensorflow-cpu
+
+      - name: Check that TensorFlow is not installed
+        run: |
+          python -c "import importlib.util, sys; sys.exit(importlib.util.find_spec('tensorflow') is not None)"
+
+      - name: Run Tests
+        shell: bash
+        run: |
+          skipped=()
+          while IFS= read -r line; do
+            case "$line" in
+              "" | "#"*) ;;
+              *::*) skipped+=(--deselect "$line") ;;
+              *) skipped+=(--ignore "$line") ;;
+            esac
+          done < .github/workflows/config/tf_free_ignored_tests.txt
+          pytest keras -n 12 --dist loadfile \
+            --ignore keras/src/applications \
+            --ignore keras/src/wrappers \
+            "${skipped[@]}"
