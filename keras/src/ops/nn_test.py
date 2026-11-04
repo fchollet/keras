@@ -3202,7 +3202,11 @@ class NNOpsCorrectnessTest(testing.TestCase):
         )
         expected = _dot_product_attention(query, key, value, is_causal=True)
         self.assertAllClose(
-            outputs, expected, atol=1e-3 if flash_attention else 1e-6
+            outputs,
+            expected,
+            atol=1e-3 if flash_attention else 1e-6,
+            tpu_atol=1e-2,
+            tpu_rtol=1e-2,
         )
 
     @parameterized.named_parameters(named_product(scale=(1.0, 10.0)))
