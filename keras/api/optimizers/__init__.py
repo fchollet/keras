@@ -32,4 +32,7 @@ from keras.src.optimizers.rmsprop import RMSprop as RMSprop
 from keras.src.optimizers.schedule_free_adamw import (
     ScheduleFreeAdamW as ScheduleFreeAdamW,
 )
+from keras.src.optimizers.schedule_free_sgd import (
+    ScheduleFreeSGD as ScheduleFreeSGD,
+)
 from keras.src.optimizers.sgd import SGD as SGD

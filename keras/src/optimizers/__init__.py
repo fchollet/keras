@@ -18,6 +18,7 @@ from keras.src.optimizers.nadam import Nadam
 from keras.src.optimizers.optimizer import Optimizer
 from keras.src.optimizers.rmsprop import RMSprop
 from keras.src.optimizers.schedule_free_adamw import ScheduleFreeAdamW
+from keras.src.optimizers.schedule_free_sgd import ScheduleFreeSGD
 from keras.src.optimizers.sgd import SGD
 from keras.src.saving import serialization_lib
 from keras.src.utils.naming import to_snake_case
@@ -41,6 +42,7 @@ ALL_OBJECTS = {
     Lion,
     LossScaleOptimizer,
     ScheduleFreeAdamW,
+    ScheduleFreeSGD,
 }
 ALL_OBJECTS_DICT = {cls.__name__: cls for cls in ALL_OBJECTS}
 ALL_OBJECTS_DICT.update(
