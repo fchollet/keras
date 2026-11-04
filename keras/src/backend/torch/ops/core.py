@@ -557,6 +557,7 @@ def vectorized_map(function, elements):
         if is_tensor(x):
             return x
         return convert_to_tensor(x)
+
     elements = tree.map_structure(safe_convert, elements)
     return torch.vmap(function)(elements)
 
