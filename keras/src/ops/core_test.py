@@ -1032,6 +1032,13 @@ class CoreOpsCorrectnessTest(testing.TestCase):
             self.assertAllClose(carry, 40.0)
             self.assertAllClose(result, ops.cumsum(xs))
 
+        # Test zero length xs
+        carry, result = core.scan(cumsum, init, np.zeros((0,), "float32"))
+        self.assertAllClose(carry, 0.0)
+        self.assertEqual(result.shape, (0,))
+        carry, result = core.scan(lambda c, _: (c, c), init, length=0)
+        self.assertEqual(result.shape, (0,))
+
         # Test xs is None
         def fibonaccis(carry, _):
             return (carry[1], carry[0] + carry[1]), None
@@ -1058,6 +1065,12 @@ class CoreOpsCorrectnessTest(testing.TestCase):
             self.assertAllClose(carry["value1"], 16)
             self.assertAllClose(carry["value2"], 24)
             self.assertAllClose(result, [10, 20, 40])
+
+            # Test zero length xs where `ys` differ from the carry
+            _, result = core.scan(
+                lambda c, x: (c, x[:2]), 0.0, np.zeros((0, 3), "float32")
+            )
+            self.assertEqual(result.shape, (0, 2))
 
         # Test nested xs
         def reduce_add(carry, xs):
@@ -1410,6 +1423,10 @@ class CoreOpsCorrectnessTest(testing.TestCase):
             return x + y
 
         output = ops.vectorized_map(fn, [ops.ones((2, 3)), ops.ones((2, 3))])
+        self.assertAllClose(output, 2 * np.ones((2, 3)))
+
+        # Case: numpy input
+        output = ops.vectorized_map(fn, [np.ones((2, 3)), np.ones((2, 3))])
         self.assertAllClose(output, 2 * np.ones((2, 3)))
 
     @parameterized.named_parameters(

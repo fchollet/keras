@@ -702,6 +702,8 @@ class LayoutMap(collections.abc.MutableMapping):
     as value, and will be converted to `TensorLayout`.
 
     ```python
+    device_mesh = DeviceMesh((2, 2), ["batch", "model"], list_devices())
+
     layout_map = LayoutMap(device_mesh)
     layout_map['.*dense.*kernel'] = (None, 'model')
     layout_map['.*dense.*bias'] = ('model',)

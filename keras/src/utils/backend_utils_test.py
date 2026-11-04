@@ -17,7 +17,7 @@ class BackendUtilsTest(testing.TestCase):
     )
     def test_dynamic_backend(self, name):
         dynamic_backend = backend_utils.DynamicBackend()
-        x = np.random.uniform(size=[1, 2, 3]).astype("float32")
+        x = np.random.uniform(size=[1, 2, 3])
 
         if name == "numpy":
             dynamic_backend.set_backend(name)

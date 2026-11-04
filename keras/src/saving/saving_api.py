@@ -97,7 +97,7 @@ def save_model(model, filepath, overwrite=True, zipped=None, **kwargs):
 
     # If file exists and should not be overwritten.
     try:
-        exists = (not is_hf) and os.path.exists(filepath)
+        exists = (not is_hf) and file_utils.exists(filepath)
     except TypeError:
         exists = False
     if exists and not overwrite:
@@ -262,7 +262,7 @@ def save_weights(
             f"specified. Received: filepath={filepath_str}"
         )
     try:
-        exists = os.path.exists(filepath)
+        exists = file_utils.exists(filepath)
     except TypeError:
         exists = False
     if exists and not overwrite:

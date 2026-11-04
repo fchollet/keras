@@ -11,6 +11,7 @@ from keras.src import models
 from keras.src import ops
 from keras.src import saving
 from keras.src import testing
+from keras.src.backend.common import get_keras_mask
 from keras.src.backend.common import standardize_dtype
 from keras.src.quantizers.gptq_config import GPTQConfig
 from keras.src.quantizers.quantization_config import Int4QuantizationConfig
@@ -382,11 +383,11 @@ class ReversibleEmbeddingTest(test_case.TestCase):
         layer.build()
 
         out = layer(np.array(([2, 1, 0])))
-        mask = backend.get_keras_mask(out)
+        mask = get_keras_mask(out)
         self.assertAllClose(mask, np.array([True, True, False]))
 
         out = layer(np.array(([[1.0, 2.0], [0.0, 0.0]])), reverse=True)
-        mask = backend.get_keras_mask(out)
+        mask = get_keras_mask(out)
         self.assertIsNone(mask)
 
     @parameterized.named_parameters(
@@ -711,7 +712,7 @@ class ReversibleEmbeddingConsistencyTest(test_case.TestCase):
     def test_mask_survives_quantization(self, mode):
         _, layer = self._layers(mode, tie_weights=True, mask_zero=True)
         outputs = layer(np.array([[0, 3, 5]]))
-        mask = backend.get_keras_mask(outputs)
+        mask = get_keras_mask(outputs)
         self.assertIsNotNone(mask)
         self.assertAllClose(mask, [[False, True, True]])
 

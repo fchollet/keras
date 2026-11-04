@@ -34,9 +34,11 @@ from keras.src.api_export import keras_export
 from keras.src.backend import KerasTensor
 from keras.src.backend.common import AutocastScope
 from keras.src.backend.common import get_autocast_scope
+from keras.src.backend.common import get_keras_mask
 from keras.src.backend.common import global_state
 from keras.src.backend.common import is_float_dtype
 from keras.src.backend.common import remat
+from keras.src.backend.common import set_keras_mask
 from keras.src.backend.common import standardize_dtype
 from keras.src.backend.common import standardize_shape
 from keras.src.backend.common.keras_tensor import any_symbolic_tensors
@@ -507,6 +509,7 @@ class Layer(BackendLayer, Operation):
         autocast=True,
         regularizer=None,
         constraint=None,
+        layout=None,
         name=None,
     ):
         """Add a weight variable to the layer.
@@ -521,6 +524,7 @@ class Layer(BackendLayer, Operation):
             autocast=autocast,
             regularizer=regularizer,
             constraint=constraint,
+            layout=layout,
             name=name,
         )
 
@@ -536,6 +540,7 @@ class Layer(BackendLayer, Operation):
         constraint=None,
         aggregation="none",
         overwrite_with_gradient=False,
+        layout=None,
         name=None,
     ):
         """Add a weight variable to the layer.
@@ -570,6 +575,10 @@ class Layer(BackendLayer, Operation):
             overwrite_with_gradient: Boolean, whether to overwrite the variable
                 with the computed gradient. This is useful for float8 training.
                 Defaults to `False`.
+            layout: Optional. Sharding layout for the variable, used instead of
+                the one the active Distribution would assign. Either a
+                `keras.distribution.TensorLayout` with its `device_mesh` set, or
+                a backend-specific layout.
             name: String name of the variable. Useful for debugging purposes.
         """
         self._check_super_called()
@@ -629,6 +638,7 @@ class Layer(BackendLayer, Operation):
                 trainable=trainable,
                 autocast=autocast,
                 aggregation=aggregation,
+                layout=layout,
                 name=name,
             )
         # Will be added to layer.losses
@@ -915,12 +925,12 @@ class Layer(BackendLayer, Operation):
         # 1. Convert any array arguments to tensors of correct dtype.
         def maybe_convert(x):
             # Prevent _keras_mask from disappearing
-            mask = backend.get_keras_mask(x)
+            mask = get_keras_mask(x)
             y = self.dtype_policy.convert_input(
                 x, self.autocast, self.input_dtype
             )
             if mask is not None:
-                backend.set_keras_mask(y, mask)
+                set_keras_mask(y, mask)
             return y
 
         # `kwargs` is usually a dict with just the `training` argument, which
@@ -995,7 +1005,7 @@ class Layer(BackendLayer, Operation):
                 arg_name = list(call_spec.tensor_arguments_dict.keys())[0]
                 only_tensor_arg = call_spec.tensor_arguments_dict[arg_name]
                 mask = tree.map_structure(
-                    backend.get_keras_mask,
+                    get_keras_mask,
                     only_tensor_arg,
                 )
                 kwargs["mask"] = mask
@@ -1004,7 +1014,7 @@ class Layer(BackendLayer, Operation):
                 expected_mask_arg_name = f"{k}_mask"
                 if expected_mask_arg_name in call_spec.argument_names:
                     if call_spec.arguments_dict[expected_mask_arg_name] is None:
-                        mask = tree.map_structure(backend.get_keras_mask, v)
+                        mask = tree.map_structure(get_keras_mask, v)
                         kwargs[expected_mask_arg_name] = mask
 
         # We need to cache the `previous_mask` before `__call__` because the
@@ -1015,7 +1025,7 @@ class Layer(BackendLayer, Operation):
         else:
             # Case 2: Fallback to the mask attached to the first input tensor.
             previous_mask = tree.map_structure(
-                backend.get_keras_mask, call_spec.first_arg
+                get_keras_mask, call_spec.first_arg
             )
 
         ####################
@@ -1881,27 +1891,47 @@ class Layer(BackendLayer, Operation):
             lambda s: backend.KerasTensor(s), input_shape
         )
         try:
-            backend.compute_output_spec(self.call, input_tensors)
+            # Because `build` is not defined, we trace `call` via
+            # `compute_output_spec` to build the nested layers. This is
+            # reached from `build_from_config`, not from `build` or
+            # `__call__`, so the name scope is not open yet; open it here so
+            # nested layers capture the same `path` as a from-code build.
+            with backend.name_scope(self.name):
+                backend.compute_output_spec(self.call, input_tensors)
+            # Mark this layer as built and capture the `path` of this layer.
+            # We do this after so that it doesn't happen in case of failure of
+            # `compute_output_spec`.
+            self.build(input_shape)
             return True
         except:
             return False
 
     def _build_by_run_for_kwargs(self, shapes_dict):
         # Case: inputs were recorded as multiple keyword arguments.
-        if all(is_shape_tuple(s) for s in shapes_dict.values()):
-            # Case: all input keyword arguments were plain tensors.
-            input_tensors = {
-                # We strip the `_shape` suffix to recover kwarg names.
-                utils.removesuffix(k, "_shape"): backend.KerasTensor(shape)
-                for k, shape in shapes_dict.items()
-            }
-            try:
-                backend.compute_output_spec(self.call, **input_tensors)
-                return True
-            except:
-                return False
-        else:
+        if not all(is_shape_tuple(s) for s in shapes_dict.values()):
             # Not supported: nested input keyword arguments.
+            return False
+
+        # Case: all input keyword arguments were plain tensors.
+        input_tensors = {
+            # We strip the `_shape` suffix to recover kwarg names.
+            utils.removesuffix(k, "_shape"): backend.KerasTensor(shape)
+            for k, shape in shapes_dict.items()
+        }
+        try:
+            # Because `build` is not defined, we trace `call` via
+            # `compute_output_spec` to build the nested layers. This is
+            # reached from `build_from_config`, not from `build` or
+            # `__call__`, so the name scope is not open yet; open it here so
+            # nested layers capture the same `path` as a from-code build.
+            with backend.name_scope(self.name):
+                backend.compute_output_spec(self.call, **input_tensors)
+            # Mark this layer as built and capture the `path` of this layer.
+            # We do this after so that it doesn't happen in case of failure of
+            # `compute_output_spec`.
+            self.build(shapes_dict)
+            return True
+        except:
             return False
 
     def __repr__(self):
@@ -2017,7 +2047,7 @@ class Layer(BackendLayer, Operation):
         flat_outputs = tree.flatten(outputs)
 
         mask_already_computed = all(
-            backend.get_keras_mask(x) is not None for x in flat_outputs
+            get_keras_mask(x) is not None for x in flat_outputs
         )
         if mask_already_computed:
             return
@@ -2028,8 +2058,8 @@ class Layer(BackendLayer, Operation):
 
         flat_masks = tree.flatten(output_masks)
         for tensor, mask in zip(flat_outputs, flat_masks):
-            if backend.get_keras_mask(tensor) is None and mask is not None:
-                backend.set_keras_mask(tensor, mask)
+            if get_keras_mask(tensor) is None and mask is not None:
+                set_keras_mask(tensor, mask)
 
     @python_utils.default
     def get_config(self):

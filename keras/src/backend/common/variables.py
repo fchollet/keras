@@ -40,8 +40,9 @@ class Variable:
             to `"none"`.
         name: Optional. A unique name for the variable. Automatically generated
             if not set.
-        layout: Optional. Sharding layout for the variable. Can be a
-            `keras.distribution.TensorLayout` or a backend-specific layout.
+        layout: Optional. Sharding layout for the variable. Either a
+            `keras.distribution.TensorLayout` with its `device_mesh` set, or a
+            backend-specific layout.
         kwargs: Additional backend-specific keyword arguments.
 
     Attributes:
@@ -141,6 +142,15 @@ class Variable:
             )
         if synchronization is None:
             synchronization = "none"
+        if layout is not None:
+            from keras.src.distribution.distribution_lib import TensorLayout
+
+            if isinstance(layout, TensorLayout) and layout.device_mesh is None:
+                raise ValueError(
+                    "Argument `layout` must have `device_mesh` set. "
+                    f"Received: layout={layout}"
+                )
+
         self._name = name
         parent_path = current_path()
         if parent_path:

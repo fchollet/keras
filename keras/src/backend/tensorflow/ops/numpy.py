@@ -1190,17 +1190,14 @@ def right_shift(x, y):
 
 def blackman(x):
     dtype = config.floatx()
-    x = tf.cast(x, dtype)
-    n = tf.range(x, dtype=dtype)
-    n_minus_1 = tf.cast(x - 1, dtype)
-    n_minus_1_safe = tf.where(
-        tf.equal(n_minus_1, 0), tf.ones_like(n_minus_1), n_minus_1
-    )
-    term1 = 0.42
-    term2 = -0.5 * tf.cos(2 * np.pi * n / n_minus_1_safe)
-    term3 = 0.08 * tf.cos(4 * np.pi * n / n_minus_1_safe)
-    window = term1 + term2 + term3
-    return tf.where(tf.equal(n_minus_1, 0), tf.ones_like(window), window)
+    compute_dtype = dtypes.result_type(dtype, "float32")
+
+    x = tf.cast(x, "int32")
+    n = tf.range(x, dtype=compute_dtype)
+    x_minus_1 = tf.cast(x - 1, compute_dtype)
+    phase = np.pi * (2 * n - x_minus_1) / tf.maximum(x_minus_1, 1.0)
+    window = 0.42 + 0.5 * tf.cos(phase) + 0.08 * tf.cos(2 * phase)
+    return tf.cast(window, dtype)
 
 
 def broadcast_to(x, shape):
@@ -3847,6 +3844,8 @@ def corrcoef(x):
 
     if tf.rank(x) == 0:
         return tf.constant(float("nan"), dtype=config.floatx())
+    if x.shape.rank == 1:
+        return tf.reshape(corrcoef(x[tf.newaxis, :]), [])
 
     mean = tf.reduce_mean(x, axis=-1, keepdims=True)
     x_centered = x - mean
@@ -3926,13 +3925,11 @@ def correlate(x1, x2, mode="valid"):
             if isinstance(n, int) and isinstance(m, int)
             else tf.maximum(n, m)
         )
-        start = (full_len - out_len) // 2
+        start = (full_len - out_len + tf.cast(tf.less(n, m), "int32")) // 2
         return tf.slice(full_corr, [start], [out_len])
     elif mode == "valid":
-        x1, x2 = _pack(x1, x2)
-        return tf.squeeze(
-            tf.nn.conv1d(x1, x2, stride=1, padding="VALID"), axis=[0, 2]
-        )
+        full_corr = _full_corr(x1, x2)
+        return full_corr[tf.minimum(n, m) - 1 : tf.maximum(n, m)]
     else:
         raise ValueError(
             f"Invalid mode: '{mode}'. Mode must be one of:"

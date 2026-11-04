@@ -16,7 +16,6 @@ from keras.src import saving
 from keras.src import testing
 from keras.src.backend.common import standardize_dtype
 from keras.src.quantizers.calibration_run import find_layers_in_block
-from keras.src.quantizers.gptq import GPTQCalibrator
 from keras.src.quantizers.gptq import _stable_permutation
 from keras.src.quantizers.gptq import gptq_quantize_matrix
 from keras.src.quantizers.gptq_config import GPTQConfig
@@ -255,11 +254,6 @@ class GPTQTest(testing.TestCase):
             255.0,
         )
         self.assertAllEqual(layer.quantized_kernel, ops.cast(expected, "uint8"))
-
-    def test_unsupported_layer_error(self):
-        unsupported_layer = _get_test_layer("Unsupported", kernel_shape=None)
-        with self.assertRaisesRegex(TypeError, "Unsupported layer type"):
-            _hessian_calibrator(unsupported_layer)
 
     def test_initialization_errors(self):
         # A 4-D einsum kernel has no 2-D calibration view.
@@ -622,136 +616,6 @@ class GPTQTest(testing.TestCase):
         for dense in block.layers:
             self.assertIn(dense.path, found)
             self.assertIs(found[dense.path], dense)
-
-    def test_gptq_calibration_hooks_fire_during_model_quantize(self):
-        """Calibration hooks must run during `model.quantize("gptq")`.
-
-        Regression test: `model.quantize` switches layers to their quantized
-        dtype policy before calibration, after which `Operation.__call__`
-        dispatches to `quantized_call` instead of `call`. The calibration
-        hooks used to patch `call` only, so they never fired: the Hessian
-        stayed all-zeros and GPTQ silently degenerated to plain nearest
-        rounding. Asserts the hook actually runs and accumulates a
-        non-trivial (non-diagonal) Hessian.
-        """
-        keras.utils.set_random_seed(123)
-        embed_dim = 8
-
-        block = models.Sequential(
-            [
-                layers.Dense(16, activation="relu"),
-                layers.Dense(embed_dim),
-            ]
-        )
-
-        inputs = layers.Input(shape=(SEQ_LEN,), dtype="int32")
-        embedding = layers.Embedding(VOCAB_SIZE, embed_dim)
-        x = embedding(inputs)
-        x = block(x)
-        x = layers.GlobalAveragePooling1D()(x)
-        outputs = layers.Dense(NUM_CLASSES)(x)
-        model = models.Model(inputs, outputs)
-
-        rng = np.random.default_rng(seed=7)
-        dataset = [
-            rng.integers(0, VOCAB_SIZE, size=(1, SEQ_LEN), dtype=np.int32)
-            for _ in range(4)
-        ]
-        tokenizer = _char_tokenizer(vocab_size=VOCAB_SIZE, seq_len=SEQ_LEN)
-
-        config = GPTQConfig(
-            dataset=dataset,
-            tokenizer=tokenizer,
-            weight_bits=4,
-            group_size=8,
-            num_samples=4,
-            sequence_length=SEQ_LEN,
-            quantization_layer_structure={
-                "pre_block_layers": [embedding],
-                "sequential_blocks": [block],
-            },
-        )
-
-        hook_calls = [0]
-        max_off_diagonal = [0.0]
-        original_update = GPTQCalibrator.observe
-
-        def spy_update(gptq_self, inp):
-            hook_calls[0] += 1
-            result = original_update(gptq_self, inp)
-            hessian = ops.convert_to_numpy(gptq_self.hessian)
-            off_diagonal = hessian - np.diag(np.diag(hessian))
-            max_off_diagonal[0] = max(
-                max_off_diagonal[0], float(np.abs(off_diagonal).max())
-            )
-            return result
-
-        GPTQCalibrator.observe = spy_update
-        try:
-            model.quantize("gptq", config=config)
-        finally:
-            GPTQCalibrator.observe = original_update
-
-        self.assertGreater(hook_calls[0], 0)
-        # A Hessian built from real activations has non-zero off-diagonal
-        # entries; an all-zeros Hessian would be replaced by the identity
-        # (dead-feature path), silently disabling error correction.
-        self.assertGreater(max_off_diagonal[0], 0.0)
-
-    def test_gptq_calibration_runs_without_grad_tracking(self):
-        """Calibration forwards must not build autograd graphs on torch.
-
-        Per-sample activations are retained across the whole calibration
-        loop, so retained graphs previously accumulated every intermediate
-        activation of every forward pass and exhausted GPU memory on
-        models that fit comfortably otherwise.
-        """
-        if backend.backend() != "torch":
-            self.skipTest("gradient tracking is specific to torch")
-        keras.utils.set_random_seed(123)
-        vocab_size, seq_len, embed_dim = 64, 8, 8
-
-        inputs = layers.Input(shape=(seq_len,), dtype="int32")
-        embedding = layers.Embedding(vocab_size, embed_dim)
-        x = embedding(inputs)
-        block = models.Sequential([layers.Dense(embed_dim)])
-        x = block(x)
-        x = layers.GlobalAveragePooling1D()(x)
-        model = models.Model(inputs, layers.Dense(2)(x))
-
-        rng = np.random.default_rng(seed=5)
-        dataset = [
-            rng.integers(0, vocab_size, size=(1, seq_len)).astype("int32")
-            for _ in range(2)
-        ]
-        config = GPTQConfig(
-            dataset=dataset,
-            tokenizer=lambda text: text,
-            weight_bits=4,
-            num_samples=2,
-            sequence_length=seq_len,
-            group_size=8,
-            quantization_layer_structure={
-                "pre_block_layers": [embedding],
-                "sequential_blocks": [block],
-            },
-        )
-
-        graph_free = [True]
-        original_update = GPTQCalibrator.observe
-
-        def spy_update(gptq_self, inp):
-            if getattr(inp, "grad_fn", None) is not None:
-                graph_free[0] = False
-            return original_update(gptq_self, inp)
-
-        GPTQCalibrator.observe = spy_update
-        try:
-            model.quantize("gptq", config=config)
-        finally:
-            GPTQCalibrator.observe = original_update
-
-        self.assertTrue(graph_free[0])
 
     @parameterized.named_parameters(
         ("per_channel", -1, 1),

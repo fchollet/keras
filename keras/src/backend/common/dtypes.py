@@ -274,11 +274,23 @@ def _lattice_result_type(*args):
     precision = config.floatx()[-2:]
     if out_weak_type:
         out_dtype = _resolve_weak_type(out_dtype, precision=precision)
+    return _cap_to_32bit(out_dtype, dtypes, weak_types)
 
-    # Force to be 32-bit dtype when encountering 64-bit dtype. This is to
-    # be aligned with JAX's default behavior.
-    out_dtype = BIT64_TO_BIT32_DTYPE.get(out_dtype, out_dtype)
-    return out_dtype
+
+def _cap_to_32bit(out_dtype, dtypes, weak_types):
+    """Caps a 64-bit `out_dtype` to 32-bit, unless `x64_mode` keeps it.
+
+    The cap matches JAX's default behavior, which refuses 64-bit dtypes. In
+    `"explicit_x64"` a result stays 64-bit only if a strongly typed input is
+    64-bit. Python scalars (weak types) and 32-bit-only inputs never promote
+    to 64-bit, as with JAX's `jax_explicit_x64_dtypes="allow"`.
+    """
+    if config.x64_mode() == "explicit_x64" and any(
+        dtype in BIT64_TO_BIT32_DTYPE and not weak_type
+        for dtype, weak_type in zip(dtypes, weak_types)
+    ):
+        return out_dtype
+    return BIT64_TO_BIT32_DTYPE.get(out_dtype, out_dtype)
 
 
 @keras_export("keras.backend.result_type")
@@ -290,6 +302,8 @@ def result_type(*dtypes):
     lattice.
 
     Note: This function attempts to match the result of `jnp.result_type`.
+    64-bit dtypes are capped to 32-bit unless `keras.config.set_x64_mode()`
+    says otherwise.
 
     Args:
         dtypes: Input dtypes.

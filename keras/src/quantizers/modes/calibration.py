@@ -3,10 +3,10 @@
 GPTQ and AWQ allocate the same family of variables, run the same
 dequantize-and-contract forward pass, and speak the same three-part policy
 grammar. They differ in the code bit-width (which fixes how the kernel is
-packed), in the dtype policy class, in the calibrator class, in the driver
-that calibrates a model and in one extra AWQ variable of input scales that
-the quantized weight divides out. `GPTQStrategy` and `AWQStrategy`, at the
-end of this module, declare these differences.
+packed), in the calibrator class, and in one extra AWQ variable of input
+scales that the quantized weight divides out. `GPTQStrategy` and
+`AWQStrategy`, at the end of this module, declare these differences as
+class attributes.
 """
 
 import math
@@ -14,7 +14,9 @@ import math
 from keras.src import ops
 from keras.src.dtype_policies.dtype_policy import AWQDTypePolicy
 from keras.src.dtype_policies.dtype_policy import GPTQDTypePolicy
+from keras.src.quantizers.awq import AWQCalibrator
 from keras.src.quantizers.awq_config import AWQConfig
+from keras.src.quantizers.gptq import GPTQCalibrator
 from keras.src.quantizers.gptq_config import GPTQConfig
 from keras.src.quantizers.modes.common import apply_bias_activation
 from keras.src.quantizers.quantized_weight import Int2Quads
@@ -95,6 +97,30 @@ class CalibrationStrategy(QuantizationStrategy):
             f"`{self.policy_cls.__name__}` or the `config` argument. "
             f"Received: dtype_policy={policy!r}"
         )
+
+    # --- Calibration run --------------------------------------------------
+
+    # The `Calibrator` class that solves this mode for one layer.
+    calibrator_cls = None
+
+    def calibrate(self, config, structure, filters=None):
+        """Runs this mode's calibration over `structure` and writes back.
+
+        Args:
+            config: The mode's config, with its dataset and tokenizer.
+            structure: Dict with keys `"pre_block_layers"` and
+                `"sequential_blocks"`, as `Model.quantize` resolved it.
+            filters: Optional filters that exclude layers from quantization.
+        """
+        # Imported here to avoid an import cycle: `calibration_run` imports
+        # the layers, which import the strategies.
+        from keras.src.quantizers.calibration_run import CalibrationRun
+
+        CalibrationRun(self, config, structure, filters).run()
+
+    def finalize_model_quantization(self, model, config, structure, filters):
+        del model
+        self.calibrate(config, structure, filters)
 
     # --- Variables --------------------------------------------------------
 
@@ -288,12 +314,7 @@ class GPTQStrategy(CalibrationStrategy):
     name = "gptq"
     config_cls = GPTQConfig
     policy_cls = GPTQDTypePolicy
-
-    def finalize_model_quantization(self, model, config, structure, filters):
-        from keras.src.quantizers.calibration_run import gptq_quantize
-
-        del model
-        gptq_quantize(config, structure, filters=filters)
+    calibrator_cls = GPTQCalibrator
 
 
 class AWQStrategy(CalibrationStrategy):
@@ -306,11 +327,6 @@ class AWQStrategy(CalibrationStrategy):
     name = "awq"
     config_cls = AWQConfig
     policy_cls = AWQDTypePolicy
+    calibrator_cls = AWQCalibrator
     # Per-input-row scales from the activation magnitudes.
     input_scales_name = "awq_scales"
-
-    def finalize_model_quantization(self, model, config, structure, filters):
-        from keras.src.quantizers.awq_core import awq_quantize
-
-        del model
-        awq_quantize(config, structure, filters=filters)
