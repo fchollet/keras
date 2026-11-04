@@ -1616,6 +1616,12 @@ def dot_product_attention(
             is_causal = False
         mask = bias  # Use `bias` as `mask` for scaled_dot_product_attention.
 
+    if is_causal and query.shape[1] < key.shape[1]:
+        # The causal mask is top left aligned, so keys past the query length
+        # are never seen. Dropping them keeps the inputs square for flash.
+        key = key[:, : query.shape[1]]
+        value = value[:, : query.shape[1]]
+
     axis0, axis1 = 1, 2
     query = torch.transpose(query, axis0, axis1)
     key = torch.transpose(key, axis0, axis1)
