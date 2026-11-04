@@ -863,6 +863,13 @@ class MathOpsCorrectnessTest(testing.TestCase):
             [[True, False], [True, True]],
         )
 
+        # Test `k` larger than the number of classes.
+        targets = np.array([0, 2])
+        predictions = np.array([[0.1, 0.2, 0.7], [0.5, 0.3, 0.2]])
+        self.assertAllEqual(
+            kmath.in_top_k(targets, predictions, k=5), [True, True]
+        )
+
     def test_logsumexp(self):
         x = np.random.rand(5, 5)
         outputs = kmath.logsumexp(x)
