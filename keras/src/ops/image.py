@@ -1,3 +1,5 @@
+import numpy as np
+
 from keras.src import backend
 from keras.src import ops
 from keras.src.api_export import keras_export
@@ -367,8 +369,8 @@ def resize(
             "Expected `size` to be a tuple of 2 integers. "
             f"Received: size={size}"
         )
-    if (isinstance(size[0], int) and size[0] <= 0) or (
-        isinstance(size[1], int) and size[1] <= 0
+    if (isinstance(size[0], (int, np.integer)) and size[0] <= 0) or (
+        isinstance(size[1], (int, np.integer)) and size[1] <= 0
     ):
         raise ValueError(
             f"`size` must have positive height and width. Received: size={size}"
