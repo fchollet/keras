@@ -25,6 +25,12 @@ TORCH_INT_TYPES = (
     torch.int64,
 )
 
+# An int8 `matmul` or `einsum` runs as float32 contractions in chunks when
+# its left operand has at least this many rows on the device. Below it, the
+# int32 contraction is as fast or faster for some shapes. Other devices,
+# such as CUDA, which has no int32 matmul, chunk at any row count.
+_INT8_CHUNKED_MIN_ROWS = {"cpu": 8, "mps": 32}
+
 
 def convert_to_tensors_of_same_dtype(x1, x2, *additional_dtypes):
     if not hasattr(x1, "dtype") and not isinstance(
@@ -87,12 +93,120 @@ def add(x1, x2):
     return torch.add(x1, x2)
 
 
+def _contract_int8_in_chunks(contract, x1, x2, axis1, axis2, chunk_size):
+    """Contracts int8 `x1` and `x2` exactly with float32 contractions.
+
+    The callers pick `chunk_size` so that each output element of a chunk
+    sums at most 1024 products. A product of two int8 values is at most
+    2^14 in magnitude, so every partial sum is an integer below 2^24 and
+    float32 holds it exactly. This holds in any summation order, and also
+    with TF32 or bfloat16-reduced matmul precision. So the int32 sum of
+    the chunks equals the int32 contraction bit for bit.
+    """
+    device_type = x1.device.type
+    # Autocast would run the float32 contractions in a lower precision. The
+    # meta device, which traces shapes, has no autocast.
+    if device_type != "meta" and torch.is_autocast_enabled(device_type):
+        with torch.autocast(device_type, enabled=False):
+            return _contract_int8_in_chunks(
+                contract, x1, x2, axis1, axis2, chunk_size
+            )
+    result = None
+    for x1_chunk, x2_chunk in zip(
+        torch.split(x1, chunk_size, dim=axis1),
+        torch.split(x2, chunk_size, dim=axis2),
+    ):
+        # Casting each chunk keeps it in cache for the contraction.
+        chunk = contract(cast(x1_chunk, "float32"), cast(x2_chunk, "float32"))
+        chunk = cast(chunk, "int32")
+        result = chunk if result is None else result + chunk
+    return result
+
+
+def _has_int8_chunked_rows(x1, rows):
+    """Returns whether an int8 contraction with `rows` rows chunks."""
+    # A symbolic `rows`, as in a `torch.export` with a dynamic batch, chunks
+    # with no comparison, because a comparison would add a guard on it.
+    if isinstance(rows, torch.SymInt):
+        return True
+    return rows >= _INT8_CHUNKED_MIN_ROWS.get(x1.device.type, 0)
+
+
+def _int8_matmul_chunks(x1, x2):
+    """Returns `(axis1, axis2, chunk_size)` to chunk an int8 matmul.
+
+    Returns `None` to keep the int32 path: when an operand is a scalar, when
+    the contracted sizes differ, so that torch raises its own error, or when
+    `x1` has fewer rows than `_INT8_CHUNKED_MIN_ROWS` gives for the device.
+    """
+    if x1.ndim == 0 or x2.ndim == 0:
+        return None
+    axis2 = 0 if x2.ndim == 1 else -2
+    if x1.shape[-1] != x2.shape[axis2]:
+        return None
+    if not _has_int8_chunked_rows(x1, math.prod(x1.shape[:-1])):
+        return None
+    return -1, axis2, 1024
+
+
+def _int8_einsum_chunks(subscripts, *operands):
+    """Returns `(axis1, axis2, chunk_size)` to chunk an int8 einsum.
+
+    The chunks run along the first contracted label that both operands
+    share. `P` is the product of the other contracted sizes, and a chunk
+    holds `1024 // P` steps of the label. Returns `None` to keep the int32
+    path: when there is no such label, when `P` is above 1024, or when the
+    left operand has fewer rows than `_INT8_CHUNKED_MIN_ROWS` gives for the
+    device. An ellipsis, no `->`, a label repeated in one operand, or other
+    than two operands also keep it.
+    """
+    subscripts = subscripts.replace(" ", "")
+    if len(operands) != 2 or "->" not in subscripts or "." in subscripts:
+        return None
+    x1, x2 = operands
+    inputs, output = subscripts.split("->")
+    labels1, labels2 = inputs.split(",")
+    if len(set(labels1)) < len(labels1) or len(set(labels2)) < len(labels2):
+        return None
+    rows = math.prod(
+        [size for label, size in zip(labels1, x1.shape) if label in output]
+    )
+    if not _has_int8_chunked_rows(x1, rows):
+        return None
+    shared = [
+        label for label in labels1 if label in labels2 and label not in output
+    ]
+    if not shared:
+        return None
+    axis1 = labels1.index(shared[0])
+    axis2 = labels2.index(shared[0])
+    # Size-1 axes broadcast, so a contracted label takes its largest size.
+    sizes = {}
+    for labels, x in ((labels1, x1), (labels2, x2)):
+        for label, size in zip(labels, x.shape):
+            if label not in output:
+                sizes[label] = builtins.max(sizes.get(label, 1), size)
+    other = math.prod(
+        [size for label, size in sizes.items() if label != shared[0]]
+    )
+    if x1.shape[axis1] != x2.shape[axis2] or other > 1024:
+        return None
+    return axis1, axis2, 1024 // builtins.max(other, 1)
+
+
 def einsum(subscripts, *operands, **kwargs):
     operands = [convert_to_tensor(operand) for operand in operands]
     # When all operands are of int8, we cast the result to int32 to align with
     # the behavior of jax.
     dtypes_to_resolve = list(set(standardize_dtype(x.dtype) for x in operands))
     if len(dtypes_to_resolve) == 1 and dtypes_to_resolve[0] == "int8":
+        chunks = _int8_einsum_chunks(subscripts, *operands)
+        if chunks is not None:
+            return _contract_int8_in_chunks(
+                lambda x1, x2: torch.einsum(subscripts, x1, x2),
+                *operands,
+                *chunks,
+            )
         compute_dtype = "int32"
         if get_device() == "cuda":
             # TODO: torch.einsum doesn't support int32 when using cuda
@@ -164,6 +278,9 @@ def matmul(x1, x2):
             pass
 
     if x1_dtype == "int8" and x2_dtype == "int8":
+        chunks = _int8_matmul_chunks(x1, x2)
+        if chunks is not None:
+            return _contract_int8_in_chunks(torch.matmul, x1, x2, *chunks)
         result_dtype = "int32"
     else:
         result_dtype = dtypes.result_type(x1.dtype, x2.dtype)
