@@ -2,6 +2,8 @@
 
 import jax
 import numpy as np
+from jax import shard_map
+from jax.sharding import PartitionSpec
 
 from keras.src.random import seed_generator
 from keras.src.utils import jax_utils
@@ -218,6 +220,144 @@ def _to_backend_layout(tensor_layout):
             "Cannot create sharding when device mesh is not set "
             "for TensorLayout."
         )
-    partition_spec = jax.sharding.PartitionSpec(*tensor_layout.axes)
+    partition_spec = PartitionSpec(*tensor_layout.axes)
     jax_mesh = tensor_layout.device_mesh.backend_mesh
     return jax.sharding.NamedSharding(jax_mesh, partition_spec)
+
+
+def _get_axis_size(axis_name):
+    """Retrieve the size of a mesh axis from the current distribution."""
+    # Avoid circular imports.
+    from keras.src.distribution import distribution_lib
+
+    dist = distribution_lib.distribution()
+    if dist is not None and dist.device_mesh is not None:
+        mesh = dist.device_mesh
+        if axis_name in mesh.axis_names:
+            axis_idx = mesh.axis_names.index(axis_name)
+            return mesh.shape[axis_idx]
+    return jax.local_device_count()
+
+
+def all_reduce(x, op="sum", axis_name="model"):
+    """Reduces a tensor across a device mesh axis using a collective.
+
+    Args:
+        x: The tensor to reduce.
+        op: The reduction operation. "sum" or "mean".
+        axis_name: The name of the mesh axis to reduce over.
+
+    Returns:
+        The reduced tensor.
+    """
+
+    def _reduce_fn(y):
+        if op == "sum":
+            return jax.lax.psum(y, axis_name=axis_name)
+        if op == "mean":
+            return jax.lax.pmean(y, axis_name=axis_name)
+        raise ValueError(
+            f"Unsupported reduction operation: {op}. "
+            "Supported options are 'sum' and 'mean'."
+        )
+
+    if jax_utils.is_in_jax_tracing_scope(x):
+        try:
+            return _reduce_fn(x)
+        except (ValueError, NameError):
+            # If the axis is not bound, we cannot perform the reduction.
+            # This happens when using patching TP inside a regular jit.
+            return x
+
+    # Eager mode:
+    # If x is a sharded JAX array, we can use shard_map to perform the
+    # collective natively.
+    if isinstance(x, jax.Array) and isinstance(
+        x.sharding, jax.sharding.NamedSharding
+    ):
+        mesh = x.sharding.mesh
+        spec = x.sharding.spec
+
+        # Find which axis of the array is sharded over `axis_name`
+        axis = -1
+        for i, a in enumerate(spec):
+            if a == axis_name:
+                axis = i
+                break
+
+        def _reduce_fn_with_gather(y):
+            y = _reduce_fn(y)
+            if axis != -1:
+                return jax.lax.all_gather(
+                    y, axis_name=axis_name, axis=axis, tiled=True
+                )
+            return y
+
+        # The output of psum/pmean is replicated along the reduced axis
+        out_spec = PartitionSpec(*(None if a == axis_name else a for a in spec))
+        return shard_map(
+            _reduce_fn_with_gather,
+            mesh=mesh,
+            in_specs=spec,
+            out_specs=out_spec,
+            check_vma=False,
+        )(x)
+
+    # Fallback for non-sharded/plain arrays:
+    axis_size = _get_axis_size(axis_name)
+    if op == "sum":
+        return x * axis_size
+    if op == "mean":
+        return x
+    raise ValueError(
+        f"Unsupported reduction operation: {op}. "
+        "Supported options are 'sum' and 'mean'."
+    )
+
+
+def all_gather(x, axis, axis_name="model"):
+    """Gathers and concatenates tensors from all devices across a mesh axis.
+
+    Args:
+        x: The input tensor shard on the local device.
+        axis: The tensor axis along which to concatenate the gathered shards.
+        axis_name: The name of the mesh axis to gather from.
+
+    Returns:
+        The full, gathered tensor.
+    """
+
+    def _gather_fn(y):
+        return jax.lax.all_gather(y, axis_name=axis_name, axis=axis, tiled=True)
+
+    if jax_utils.is_in_jax_tracing_scope(x):
+        try:
+            return _gather_fn(x)
+        except (ValueError, NameError):
+            # If the axis is not bound, we cannot perform the gather.
+            return x
+
+    # Eager mode:
+    # If x is a sharded JAX array, we can use shard_map to perform the
+    # collective natively.
+    if isinstance(x, jax.Array) and isinstance(
+        x.sharding, jax.sharding.NamedSharding
+    ):
+        mesh = x.sharding.mesh
+        spec = x.sharding.spec
+        # The output of all_gather is replicated along the gathered axis
+        out_spec = PartitionSpec(*(None if a == axis_name else a for a in spec))
+        return shard_map(
+            _gather_fn,
+            mesh=mesh,
+            in_specs=spec,
+            out_specs=out_spec,
+            check_vma=False,
+        )(x)
+
+    # Fallback for non-sharded/plain arrays:
+    axis_size = _get_axis_size(axis_name)
+    actual_axis = axis if axis >= 0 else axis + len(x.shape)
+    if isinstance(x, jax.Array):
+        return jax.numpy.repeat(x, axis_size, axis=actual_axis)
+    return np.repeat(x, axis_size, axis=actual_axis)

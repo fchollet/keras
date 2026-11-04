@@ -66,6 +66,16 @@ class JaxDistributionLibTest(testing.TestCase):
             self.assertIsInstance(converted_jax_device, jax.Device)
             self.assertEqual(jax_d, converted_jax_device)
 
+        # jax.Device input
+        device = jax.devices()[0]
+        self.assertEqual(backend_dlib._to_backend_device(device), device)
+        # String without ':'
+        res = backend_dlib._to_backend_device("cpu")
+        self.assertEqual(res.platform, "cpu")
+        # Invalid device
+        with self.assertRaises(RuntimeError):
+            backend_dlib._to_backend_device("invalid_backend:999")
+
     @mock.patch.object(jax.distributed, "initialize", return_value=None)
     def test_initialize_with_all_job_addresses(self, mock_jax_initialize):
         backend_dlib.initialize("10.0.0.1:1234,10.0.0.2:2345", 2, 0)
@@ -109,6 +119,15 @@ class JaxDistributionLibTest(testing.TestCase):
         # Test without jit
         result = distribution_lib.distribute_tensor(inputs, target_layout)
         self.assertTrue(result.sharding.is_equivalent_to(target_layout, ndim=2))
+
+        # Non-JAX array
+        x_list = jax.numpy.array([1.0, 2.0])
+        res = backend_dlib.distribute_tensor(x_list, target_layout)
+        self.assertIsInstance(res, jax.Array)
+
+        # Already distributed jax.Array (equivalent sharding)
+        res = backend_dlib.distribute_tensor(result, target_layout)
+        self.assertIs(res, result)
 
     def test_distribute_tensor_with_jax_layout(self):
         jax_mesh = jax.sharding.Mesh(
@@ -366,6 +385,211 @@ class JaxDistributionLibTest(testing.TestCase):
         self.assertEqual(len(result.addressable_shards), self.device_count)
         for shard in result.addressable_shards:
             self.assertEqual(shard.data.shape, (3, 5))
+
+    def test_all_reduce_eager(self):
+        # Eager mode (no distribution context -> uses local_device_count)
+        axis_size = self.device_count
+        x = np.ones((axis_size * 2, 4), dtype=np.float32)
+
+        # Test sum
+        res_sum = backend_dlib.all_reduce(x, op="sum", axis_name="model")
+        self.assertEqual(res_sum.shape, x.shape)
+        expected_sum = np.full(x.shape, axis_size, dtype=np.float32)
+        np.testing.assert_allclose(res_sum, expected_sum)
+
+        # Test mean
+        res_mean = backend_dlib.all_reduce(x, op="mean", axis_name="model")
+        self.assertEqual(res_mean.shape, x.shape)
+        expected_mean = np.ones(x.shape, dtype=np.float32)
+        np.testing.assert_allclose(res_mean, expected_mean)
+
+        # Test errors
+        with self.assertRaisesRegex(
+            ValueError, "Unsupported reduction operation"
+        ):
+            backend_dlib.all_reduce(x, op="invalid", axis_name="model")
+
+    def test_all_gather_eager(self):
+        # Eager mode (no distribution context -> uses local_device_count)
+        axis_size = self.device_count
+        x = np.ones((axis_size * 2, 2), dtype=np.float32)
+
+        # Gather along axis 1
+        res = backend_dlib.all_gather(x, axis=1, axis_name="model")
+        self.assertEqual(res.shape, (axis_size * 2, 2 * axis_size))
+
+        # Gather along axis 0
+        res0 = backend_dlib.all_gather(x, axis=0, axis_name="model")
+        self.assertEqual(res0.shape, (axis_size * 2 * axis_size, 2))
+
+        # Test fallback for non-sharded jax.Array
+        x_jax = jax.numpy.ones((2, 2))
+        res_jax = backend_dlib.all_gather(x_jax, axis=0, axis_name="model")
+        axis_size_val = backend_dlib._get_axis_size("model")
+        self.assertEqual(res_jax.shape, (2 * axis_size_val, 2))
+        self.assertIsInstance(res_jax, jax.Array)
+
+    def test_all_reduce_eager_with_distribution(self):
+        axis_names = ["batch", "model"]
+        device_mesh = distribution_lib.DeviceMesh(
+            self.mesh_shape, axis_names, backend_dlib.list_devices()
+        )
+        # self.mesh_shape = (4, 2). 'model' axis size is 2.
+
+        dist = distribution_lib.ModelParallel(
+            device_mesh=device_mesh,
+            layout_map=distribution_lib.LayoutMap(device_mesh),
+        )
+
+        with dist.scope():
+            x = np.ones((2, 4), dtype=np.float32)
+            # Should use axis_size=2 from the mesh axis 'model'
+            res = backend_dlib.all_reduce(x, op="sum", axis_name="model")
+            self.assertEqual(res.shape, x.shape)
+            np.testing.assert_allclose(res, 2.0)
+
+            # Test mean
+            res_mean = backend_dlib.all_reduce(x, op="mean", axis_name="model")
+            self.assertEqual(res_mean.shape, x.shape)
+            np.testing.assert_allclose(res_mean, 1.0)
+
+            # Test axis not in mesh
+            res_default = backend_dlib.all_reduce(
+                x, op="sum", axis_name="unknown"
+            )
+            # Should fallback to jax.local_device_count()
+            np.testing.assert_allclose(res_default, float(self.device_count))
+
+    def test_all_reduce_fallback_in_jit(self):
+        x = np.ones((4, 4), dtype=np.float32)
+
+        @jax.jit
+        def reduce_fn(y):
+            return backend_dlib.all_reduce(y, op="sum", axis_name="model")
+
+        res = reduce_fn(x)
+        # Should return x unchanged because axis is not bound
+        np.testing.assert_allclose(res, x)
+
+    def test_all_reduce_errors(self):
+        x = np.ones((4, 4), dtype=np.float32)
+        with self.assertRaisesRegex(
+            ValueError, "Unsupported reduction operation"
+        ):
+            backend_dlib.all_reduce(x, op="invalid", axis_name="model")
+
+    def test_all_reduce_sharded(self):
+        jax_mesh = jax.sharding.Mesh(
+            np.array(jax.devices()).reshape(self.mesh_shape), ("batch", "model")
+        )
+        x = jax.numpy.ones((self.mesh_shape[0] * 2, self.mesh_shape[1] * 2))
+        sharding = jax.sharding.NamedSharding(jax_mesh, P("batch", "model"))
+        x_sharded = jax.device_put(x, sharding)
+
+        # sum
+        res_sum = backend_dlib.all_reduce(
+            x_sharded, op="sum", axis_name="model"
+        )
+        self.assertIsInstance(res_sum, jax.Array)
+        # Should be shape-preserving logically
+        self.assertEqual(res_sum.shape, x.shape)
+        # model axis has size self.mesh_shape[1]
+        np.testing.assert_allclose(res_sum, float(self.mesh_shape[1]))
+        # output should be replicated on "model" axis
+        self.assertEqual(res_sum.sharding.spec, P("batch", None))
+
+        # mean
+        res_mean = backend_dlib.all_reduce(
+            x_sharded, op="mean", axis_name="model"
+        )
+        self.assertEqual(res_mean.shape, x.shape)
+        np.testing.assert_allclose(res_mean, 1.0)
+        self.assertEqual(res_mean.sharding.spec, P("batch", None))
+
+        # Test the case where axis == -1 in sharded array logic
+        sharding_batch = jax.sharding.NamedSharding(jax_mesh, P("batch", None))
+        x_sharded_batch = jax.device_put(
+            jax.numpy.ones((self.mesh_shape[0] * 2, 4)), sharding_batch
+        )
+        res_not_sharded = backend_dlib.all_reduce(
+            x_sharded_batch, op="sum", axis_name="model"
+        )
+        # model axis has size self.mesh_shape[1] = 2.
+        # Since x is replicated on 'model', psum on 'model' returns x * 2.0
+        np.testing.assert_allclose(
+            res_not_sharded, x_sharded_batch * float(self.mesh_shape[1])
+        )
+
+    def test_all_gather_sharded(self):
+        jax_mesh = jax.sharding.Mesh(
+            np.array(jax.devices()).reshape(self.mesh_shape), ("batch", "model")
+        )
+        # Global shape (8, 4) if mesh is (4, 2)
+        x = jax.numpy.ones((self.mesh_shape[0] * 2, self.mesh_shape[1] * 2))
+        sharding = jax.sharding.NamedSharding(jax_mesh, P("batch", "model"))
+        x_sharded = jax.device_put(x, sharding)
+
+        # Gather along axis 1, mesh axis "model"
+        res = backend_dlib.all_gather(x_sharded, axis=1, axis_name="model")
+        self.assertIsInstance(res, jax.Array)
+        self.assertEqual(res.shape, x.shape)
+        # The output of all_gather is replicated along the gathered mesh axis
+        self.assertEqual(res.sharding.spec, P("batch", None))
+
+    def test_all_gather_fallback_in_jit(self):
+        x = np.ones((4, 4), dtype=np.float32)
+
+        @jax.jit
+        def gather_fn(y):
+            return backend_dlib.all_gather(y, axis=1, axis_name="model")
+
+        res = gather_fn(x)
+        # Should return x unchanged because axis is not bound
+        np.testing.assert_allclose(res, x)
+
+    def test_distribute_tensor_extra(self):
+        # Non-JAX array
+        x = jax.numpy.array([1.0, 2.0])
+        layout = jax.sharding.SingleDeviceSharding(jax.devices()[0])
+        res = backend_dlib.distribute_tensor(x, layout)
+        self.assertIsInstance(res, jax.Array)
+
+        # Already distributed jax.Array (equivalent sharding)
+        x_jax = jax.device_put(jax.numpy.ones((2, 2)), layout)
+        res = backend_dlib.distribute_tensor(x_jax, layout)
+        self.assertIs(res, x_jax)
+
+    def test_to_backend_device_extra(self):
+        device = jax.devices()[0]
+        # jax.Device input
+        self.assertEqual(backend_dlib._to_backend_device(device), device)
+        # String without ':'
+        res = backend_dlib._to_backend_device("cpu")
+        self.assertEqual(res.platform, "cpu")
+        with self.assertRaises(RuntimeError):
+            backend_dlib._to_backend_device("invalid_backend:999")
+
+    def test_all_reduce_axis_not_sharded(self):
+        # Test the case where axis == -1 in sharded array logic
+        jax_mesh = jax.sharding.Mesh(
+            np.array(jax.devices()).reshape(self.mesh_shape), ("batch", "model")
+        )
+        x = jax.numpy.ones((self.mesh_shape[0] * 2, 4))
+        sharding = jax.sharding.NamedSharding(jax_mesh, P("batch", None))
+        x_sharded = jax.device_put(x, sharding)
+
+        res = backend_dlib.all_reduce(x_sharded, op="sum", axis_name="model")
+        # model axis has size self.mesh_shape[1] = 2.
+        # Since x is replicated on 'model', psum on 'model' returns x * 2.0
+        np.testing.assert_allclose(res, x * float(self.mesh_shape[1]))
+
+    def test_all_gather_fallback_jax_array(self):
+        # Test fallback for non-sharded jax.Array
+        x = jax.numpy.ones((2, 2))
+        res = backend_dlib.all_gather(x, axis=0, axis_name="model")
+        axis_size = backend_dlib._get_axis_size("model")
+        self.assertEqual(res.shape, (2 * axis_size, 2))
+        self.assertIsInstance(res, jax.Array)
 
 
 class ShardingCaptureLayer(layers.Layer):
