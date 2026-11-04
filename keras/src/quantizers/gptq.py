@@ -329,7 +329,7 @@ class GPTQCalibrator(Calibrator):
 
         Args:
             layers: List of `(name, tokens, rows)` for every undersampled
-                layer, as tallied by the calibration driver.
+                layer, as tallied by `CalibrationRun`.
         """
         worst = min(tokens / rows for _, tokens, rows in layers)
         examples = ", ".join(

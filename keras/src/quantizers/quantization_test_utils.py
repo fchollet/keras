@@ -11,13 +11,8 @@ import numpy as np
 from keras.src import layers
 from keras.src import models
 from keras.src.quantizers import strategy_registry
-from keras.src.quantizers.awq import AWQCalibrator
-from keras.src.quantizers.gptq import GPTQCalibrator
 
 # --- Calibration ----------------------------------------------------------
-
-# The calibrator class of each calibration mode.
-_CALIBRATORS = {"gptq": GPTQCalibrator, "awq": AWQCalibrator}
 
 
 def calibration_config(mode, **kwargs):
@@ -52,7 +47,8 @@ def calibrate_layer(layer, config, *batches, solve=True):
     """
     if solve and layer.quantization_mode is None:
         layer.quantize(config.mode, config=config)
-    calibrator = _CALIBRATORS[config.mode](layer, config)
+    strategy = strategy_registry.get_strategy(config.mode)
+    calibrator = strategy.calibrator_cls(layer, config)
     for batch in batches:
         calibrator.observe(batch)
     if solve:

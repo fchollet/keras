@@ -30,7 +30,7 @@ jobs:
       image: python:3.11-slim
 
     name: ${{ format('Run tests on CPU ({0}{1})', matrix.backend, matrix.nnx_enabled && ', NNX' || '') }}
-    runs-on: linux-x86-n2-16
+    runs-on: linux-x86-n4-16
     timeout-minutes: ${{ inputs.timeout }}
 
     env:
@@ -134,7 +134,7 @@ jobs:
 
       - name: Run Tests
         if: ${{ matrix.nnx_enabled == false }}
-        run: pytest keras -n auto --dist loadfile --ignore keras/src/applications --ignore keras/src/wrappers --cov=keras --cov-config=pyproject.toml
+        run: pytest keras -n 12 --dist loadfile --ignore keras/src/applications --ignore keras/src/wrappers --cov=keras --cov-config=pyproject.toml
 
       - name: Run Tests Incompatible with pytest-xdist
         if: ${{ matrix.nnx_enabled == false }}

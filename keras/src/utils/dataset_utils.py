@@ -729,19 +729,10 @@ def index_directory(
         - class_names: names of the classes corresponding to these labels, in
         order.
     """
-    if file_utils.is_remote_path(directory):
-        from keras.src.utils.module_utils import tensorflow as tf
-
-        os_module = tf.io.gfile
-        path_module = tf.io.gfile
-    else:
-        os_module = os
-        path_module = os.path
-
     if labels == "inferred":
         subdirs = []
-        for subdir in sorted(os_module.listdir(directory)):
-            if path_module.isdir(path_module.join(directory, subdir)):
+        for subdir in sorted(file_utils.listdir(directory)):
+            if file_utils.isdir(file_utils.join(directory, subdir)):
                 if not subdir.startswith("."):
                     if subdir.endswith("/"):
                         subdir = subdir[:-1]
@@ -779,7 +770,7 @@ def index_directory(
     results = []
     filenames = []
 
-    for dirpath in (path_module.join(directory, subdir) for subdir in subdirs):
+    for dirpath in (file_utils.join(directory, subdir) for subdir in subdirs):
         results.append(
             pool.apply_async(
                 index_subdirectory,
@@ -821,7 +812,7 @@ def index_directory(
             )
     pool.close()
     pool.join()
-    file_paths = [path_module.join(directory, fname) for fname in filenames]
+    file_paths = [file_utils.join(directory, fname) for fname in filenames]
 
     if shuffle:
         # Shuffle globally to erase macro-structure
@@ -836,17 +827,7 @@ def index_directory(
 
 
 def iter_valid_files(directory, follow_links, formats):
-    if file_utils.is_remote_path(directory):
-        from keras.src.utils.module_utils import tensorflow as tf
-
-        io_module = tf.io.gfile
-    else:
-        io_module = os
-
-    if not follow_links:
-        walk = io_module.walk(directory)
-    else:
-        walk = os.walk(directory, followlinks=follow_links)
+    walk = file_utils.walk(directory, followlinks=follow_links)
     for root, _, files in sorted(walk, key=lambda x: x[0]):
         for fname in sorted(files):
             if fname.lower().endswith(formats):
@@ -868,21 +849,14 @@ def index_subdirectory(directory, class_indices, follow_links, formats):
             paths, and `labels` is a list of integer labels corresponding
             to these files.
     """
-    if file_utils.is_remote_path(directory):
-        from keras.src.utils.module_utils import tensorflow as tf
-
-        path_module = tf.io.gfile
-    else:
-        path_module = os.path
-
     dirname = os.path.basename(directory)
     valid_files = iter_valid_files(directory, follow_links, formats)
     labels = []
     filenames = []
     for root, fname in valid_files:
         labels.append(class_indices[dirname])
-        absolute_path = path_module.join(root, fname)
-        relative_path = path_module.join(
+        absolute_path = file_utils.join(root, fname)
+        relative_path = file_utils.join(
             dirname, os.path.relpath(absolute_path, directory)
         )
         filenames.append(relative_path)

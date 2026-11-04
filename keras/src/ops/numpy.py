@@ -1844,7 +1844,30 @@ def blackman(x):
             f"Blackman operation does not support symbolic tensors. "
             f"Received input x = {x} of type {type(x)}"
         )
-    return backend.ops.numpy.blackman(x)
+    return _blackman(x)
+
+
+def _blackman(x):
+    if not config._use_backend_agnostic_ops() and hasattr(
+        backend.ops.numpy, "blackman"
+    ):
+        return backend.ops.numpy.blackman(x)
+    dtype = config.floatx()
+    compute_dtype = dtypes.result_type(dtype, "float32")
+    x = backend.ops.cast(x, "int32")
+    n = backend.ops.numpy.arange(x, dtype=compute_dtype)
+    x_minus_1 = backend.ops.cast(x - 1, compute_dtype)
+    phase = (
+        python_math.pi
+        * (2 * n - x_minus_1)
+        / backend.ops.numpy.maximum(x_minus_1, 1.0)
+    )
+    window = (
+        0.42
+        + 0.5 * backend.ops.numpy.cos(phase)
+        + 0.08 * backend.ops.numpy.cos(2 * phase)
+    )
+    return backend.ops.cast(window, dtype)
 
 
 class BroadcastTo(Operation):
@@ -2676,7 +2699,7 @@ class Diagflat(Operation):
         self.k = k
 
     def call(self, x):
-        return backend.ops.numpy.diagflat(x, k=self.k)
+        return _diagflat(x, k=self.k)
 
     def compute_output_spec(self, x):
         x_shape = x.shape
@@ -2723,7 +2746,17 @@ def diagflat(x, k=0):
     """
     if any_symbolic_tensors((x,)):
         return Diagflat(k=k).symbolic_call(x)
-    return backend.ops.numpy.diagflat(x, k=k)
+    return _diagflat(x, k=k)
+
+
+def _diagflat(x, k=0):
+    if not config._use_backend_agnostic_ops() and hasattr(
+        backend.ops.numpy, "diagflat"
+    ):
+        return backend.ops.numpy.diagflat(x, k=k)
+    x = backend.ops.convert_to_tensor(x)
+    x = backend.ops.numpy.reshape(x, [-1])
+    return backend.ops.numpy.diag(x, k=k)
 
 
 class Diagonal(Operation):
@@ -9867,10 +9900,10 @@ def logical_xor(x1, x2):
 
 class Corrcoef(Operation):
     def call(self, x):
-        return backend.ops.numpy.corrcoef(x)
+        return _corrcoef(x)
 
     def compute_output_spec(self, x):
-        dtype = standardize_dtype(getattr(x, "dtype", backend.floatx()))
+        dtype = standardize_dtype(getattr(x, "dtype", config.floatx()))
         if dtype == "int64":
             dtype = "float64"
         else:
@@ -9899,7 +9932,22 @@ def corrcoef(x):
     """
     if any_symbolic_tensors((x,)):
         return Corrcoef().symbolic_call(x)
-    return backend.ops.numpy.corrcoef(x)
+    return _corrcoef(x)
+
+
+def _corrcoef(x):
+    if not config._use_backend_agnostic_ops() and hasattr(
+        backend.ops.numpy, "corrcoef"
+    ):
+        return backend.ops.numpy.corrcoef(x)
+    x_cov = _cov(x)
+    if len(x_cov.shape) == 0:
+        return backend.ops.numpy.divide(x_cov, x_cov)
+    stddev = backend.ops.numpy.sqrt(backend.ops.numpy.diagonal(x_cov))
+    x_corr = backend.ops.numpy.divide(
+        x_cov, backend.ops.numpy.outer(stddev, stddev)
+    )
+    return backend.ops.numpy.clip(x_corr, -1, 1)
 
 
 class Correlate(Operation):
@@ -9908,7 +9956,7 @@ class Correlate(Operation):
         self.mode = mode
 
     def call(self, x1, x2):
-        return backend.ops.numpy.correlate(x1, x2, mode=self.mode)
+        return _correlate(x1, x2, mode=self.mode)
 
     def compute_output_spec(self, x1, x2):
         x1_shape = getattr(x1, "shape", [])
@@ -9942,7 +9990,7 @@ class Correlate(Operation):
         )
         if output_dtype == "int64":
             output_dtype = "float64"
-        elif output_dtype not in ["bfloat16", "float16", "float64"]:
+        elif "int" in output_dtype or output_dtype == "bool":
             output_dtype = "float32"
         return KerasTensor(output_shape, dtype=output_dtype)
 
@@ -9975,7 +10023,62 @@ def correlate(x1, x2, mode="valid"):
     """
     if any_symbolic_tensors((x1, x2)):
         return Correlate(mode=mode).symbolic_call(x1, x2)
-    return backend.ops.numpy.correlate(x1, x2, mode=mode)
+    return _correlate(x1, x2, mode=mode)
+
+
+def _correlate(x1, x2, mode="valid"):
+    if not config._use_backend_agnostic_ops() and hasattr(
+        backend.ops.numpy, "correlate"
+    ):
+        return backend.ops.numpy.correlate(x1, x2, mode=mode)
+    if mode not in ("valid", "same", "full"):
+        raise ValueError(
+            "`mode` must be either `valid`, `same`, or `full`. "
+            f"Received: mode={mode}"
+        )
+    x1 = backend.ops.convert_to_tensor(x1)
+    x2 = backend.ops.convert_to_tensor(x2)
+    if len(x1.shape) != 1 or len(x2.shape) != 1:
+        raise ValueError(
+            "`x1` and `x2` must be 1-dimensional tensors. "
+            f"Received: x1.shape={x1.shape}, x2.shape={x2.shape}"
+        )
+    dtype = dtypes.result_type(x1.dtype, x2.dtype)
+    if dtype == "int64":
+        dtype = "float64"
+    elif "int" in dtype or dtype == "bool":
+        dtype = "float32"
+    x1 = backend.ops.cast(x1, dtype)
+    x2 = backend.ops.cast(x2, dtype)
+    x1_len = backend.ops.shape(x1)[0]
+    x2_len = backend.ops.shape(x2)[0]
+    full_len = x1_len + x2_len - 1
+    x1 = backend.ops.numpy.pad(x1, [(x2_len - 1, x2_len - 1)])
+    indices = backend.ops.numpy.add(
+        backend.ops.numpy.expand_dims(
+            backend.ops.numpy.arange(full_len), axis=1
+        ),
+        backend.ops.numpy.arange(x2_len),
+    )
+    output = backend.ops.numpy.matmul(backend.ops.numpy.take(x1, indices), x2)
+    if mode == "full":
+        return output
+    len_diff = builtins.abs(x1_len - x2_len)
+    shorter_len = (x1_len + x2_len - len_diff) // 2
+    if mode == "valid":
+        start = shorter_len - 1
+        output_len = len_diff + 1
+    else:
+        start = backend.ops.numpy.where(
+            backend.ops.numpy.less(x1_len, x2_len),
+            shorter_len // 2,
+            (shorter_len - 1) // 2,
+        )
+        output_len = shorter_len + len_diff
+    return backend.ops.numpy.take(
+        output,
+        backend.ops.numpy.add(backend.ops.numpy.arange(output_len), start),
+    )
 
 
 class Select(Operation):
@@ -10094,7 +10197,7 @@ class Argpartition(Operation):
         self.axis = axis
 
     def call(self, x):
-        return backend.ops.numpy.argpartition(x, kth=self.kth, axis=self.axis)
+        return _argpartition(x, kth=self.kth, axis=self.axis)
 
     def compute_output_spec(self, x):
         shape = x.shape
@@ -10135,7 +10238,27 @@ def argpartition(x, kth, axis=-1):
     """
     if any_symbolic_tensors((x,)):
         return Argpartition(kth, axis).symbolic_call(x)
-    return backend.ops.numpy.argpartition(x, kth, axis)
+    return _argpartition(x, kth, axis)
+
+
+def _argpartition(x, kth, axis=-1):
+    if not config._use_backend_agnostic_ops() and hasattr(
+        backend.ops.numpy, "argpartition"
+    ):
+        return backend.ops.numpy.argpartition(x, kth, axis)
+    x = backend.ops.convert_to_tensor(x)
+    if axis is None:
+        x = backend.ops.numpy.reshape(x, (-1,))
+        axis = -1
+    size = x.shape[axis]
+    if size is not None and not -size <= kth < size:
+        raise ValueError(
+            f"kth must be in the range [-{size}, {size}) for an axis of size "
+            f"{size}. Received: kth={kth}"
+        )
+    # A full sort is a valid partition for every kth.
+    indices = backend.ops.numpy.argsort(x, axis=axis)
+    return backend.ops.cast(indices, "int32")
 
 
 class Histogram(Operation):
@@ -10239,7 +10362,7 @@ class ArraySplit(Operation):
         self.axis = axis
 
     def call(self, x):
-        return backend.ops.numpy.array_split(
+        return _array_split(
             x,
             indices_or_sections=self.indices_or_sections,
             axis=self.axis,
@@ -10327,9 +10450,27 @@ def array_split(x, indices_or_sections, axis=0):
             indices_or_sections=indices_or_sections, axis=axis
         ).symbolic_call(x)
 
-    return backend.ops.numpy.array_split(
-        x, indices_or_sections=indices_or_sections, axis=axis
-    )
+    return _array_split(x, indices_or_sections=indices_or_sections, axis=axis)
+
+
+def _array_split(x, indices_or_sections, axis=0):
+    if not config._use_backend_agnostic_ops() and hasattr(
+        backend.ops.numpy, "array_split"
+    ):
+        return backend.ops.numpy.array_split(
+            x, indices_or_sections=indices_or_sections, axis=axis
+        )
+    x = backend.ops.convert_to_tensor(x)
+    total_size = backend.ops.shape(x)[axis]
+    num_splits = indices_or_sections
+    if num_splits == 1:
+        return [x]
+    indices = []
+    offset = 0
+    for i in range(num_splits - 1):
+        offset += (total_size + num_splits - 1 - i) // num_splits
+        indices.append(offset)
+    return backend.ops.numpy.split(x, indices, axis=axis)
 
 
 class Unique(Operation):

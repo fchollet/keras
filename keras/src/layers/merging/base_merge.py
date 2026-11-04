@@ -1,5 +1,7 @@
 from keras.src import backend
 from keras.src import ops
+from keras.src.backend.common import get_keras_mask
+from keras.src.backend.common import set_keras_mask
 from keras.src.backend.common.keras_tensor import KerasTensor
 from keras.src.layers.layer import Layer
 
@@ -35,7 +37,7 @@ class Merge(Layer):
         output_mask = None
 
         for x in inputs:
-            mask = backend.get_keras_mask(x)
+            mask = get_keras_mask(x)
             if mask is not None:
                 mask = backend.ops.numpy.broadcast_to(
                     backend.ops.numpy.expand_dims(mask, -1),
@@ -59,7 +61,7 @@ class Merge(Layer):
             output_mask = backend.ops.numpy.any(
                 output_mask, axis=-1, keepdims=False
             )
-            backend.set_keras_mask(output, output_mask)
+            set_keras_mask(output, output_mask)
         return output
 
     def _compute_elemwise_op_output_shape(self, shape1, shape2):

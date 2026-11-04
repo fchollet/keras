@@ -6,6 +6,7 @@ import numpy as np
 from keras.src.api_export import keras_export
 from keras.src.backend.config import standardize_data_format
 from keras.src.utils import dataset_utils
+from keras.src.utils import file_utils
 from keras.src.utils import image_utils
 from keras.src.utils.grain_utils import make_batch
 from keras.src.utils.module_utils import grain
@@ -635,7 +636,9 @@ def _load_image_grain(
     elif isinstance(path, (pathlib.Path, bytes, str)):
         if isinstance(path, pathlib.Path):
             path = str(path.resolve())
-        img = pil_image.open(path)
+        with file_utils.File(path, "rb") as f:
+            img = pil_image.open(f)
+            img.load()
     else:
         raise TypeError(
             f"path should be path-like or io.BytesIO, not {type(path)}"

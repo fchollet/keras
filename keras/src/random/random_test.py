@@ -114,6 +114,11 @@ class RandomCorrectnessTest(testing.TestCase):
         x_res = random.dropout(x, rate=1.0, seed=0)
         self.assertAllClose(x_res, ops.zeros((10, 10)))
 
+        x = np.ones((10, 10), dtype="float32")
+        self.assertEqual(random.dropout(x, rate=0.5).shape, (10, 10))
+        self.assertEqual(random.dropout(x, rate=0.5, seed=0).shape, (10, 10))
+        self.assertAllClose(random.dropout(x, rate=1.0), np.zeros((10, 10)))
+
     def test_dropout_noise_shape(self):
         inputs = ops.ones((2, 3, 5, 7))
         x = random.dropout(

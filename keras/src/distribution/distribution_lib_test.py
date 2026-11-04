@@ -8,9 +8,45 @@ import pytest
 import tensorflow as tf
 
 from keras.src import backend
+from keras.src import layers
 from keras.src import testing
 from keras.src.backend import distribution_lib as backend_dlib
 from keras.src.distribution import distribution_lib
+
+
+class LayerWithLayout(layers.Layer):
+    def __init__(self, layout, **kwargs):
+        self.layout = layout
+        super().__init__(**kwargs)
+
+    def build(self, input_shape):
+        self.bias = self.add_weight(
+            shape=(input_shape[-1],),
+            initializer="ones",
+            layout=self.layout,
+            name="bias",
+        )
+
+    def call(self, inputs):
+        return inputs + self.bias
+
+
+class MockDeviceMesh:
+    device_type = "cpu"
+
+
+def create_custom_layout():
+    """Create a custom layout for testing.
+
+    This layout is based on the real devices, but cannot possibly match a
+    layout created by DataParallel or ModelParallel as it uses a different axis
+    name.
+    """
+    explicit_devices = np.array(backend_dlib.list_devices())
+    explicit_mesh = distribution_lib.DeviceMesh(
+        explicit_devices.shape, ["x"], explicit_devices
+    )
+    return distribution_lib.TensorLayout(["x"], explicit_mesh)
 
 
 @pytest.mark.skipif(
@@ -279,19 +315,56 @@ class DataParallelDistributionTest(testing.TestCase):
         self.assertIs(variable_layout.device_mesh, self.device_mesh)
         self.assertEqual(variable_layout.axes, (None,))
 
-    def test_get_variable_layout_with_explicit_layout(self):
+    def test_variable_layout_with_explicit_layout(self):
         distribution = distribution_lib.DataParallel(
             device_mesh=self.device_mesh
         )
+        explicit_layout = create_custom_layout()
 
-        explicit_mesh = distribution_lib.DeviceMesh((8,), ["x"], self.devices)
-        explicit_layout = distribution_lib.TensorLayout(["x"], explicit_mesh)
+        with (
+            distribution.scope(),
+            mock.patch.object(
+                backend_dlib,
+                "_to_backend_mesh",
+                return_value=MockDeviceMesh(),
+            ),
+            mock.patch.object(
+                backend_dlib,
+                "distribute_tensor",
+                side_effect=lambda v, l: v,
+            ) as mock_distribute_tensor,
+        ):
+            backend.Variable(
+                shape=(3,), initializer="ones", layout=explicit_layout
+            )
+            mock_distribute_tensor.assert_called_once()
+            _, actual_layout = mock_distribute_tensor.call_args.args
+            self.assertIs(actual_layout, explicit_layout)
 
-        variable = backend.Variable(initializer=[1.0, 2.0, 3.0])
-        variable._layout = explicit_layout
-        variable_layout = distribution.get_variable_layout(variable)
-        self.assertIs(variable_layout.device_mesh, explicit_mesh)
-        self.assertEqual(variable_layout.axes, explicit_layout.axes)
+    def test_add_weight_layout_with_explicit_layout(self):
+        distribution = distribution_lib.DataParallel(
+            device_mesh=self.device_mesh
+        )
+        explicit_layout = create_custom_layout()
+        layer = LayerWithLayout(layout=explicit_layout)
+
+        with (
+            distribution.scope(),
+            mock.patch.object(
+                backend_dlib,
+                "_to_backend_mesh",
+                return_value=MockDeviceMesh(),
+            ),
+            mock.patch.object(
+                backend_dlib,
+                "distribute_tensor",
+                side_effect=lambda v, l: v,
+            ) as mock_distribute_tensor,
+        ):
+            layer.build((8, explicit_layout.device_mesh.devices.size))
+            mock_distribute_tensor.assert_called_once()
+            _, actual_layout = mock_distribute_tensor.call_args.args
+            self.assertIs(actual_layout, explicit_layout)
 
     @mock.patch.object(backend_dlib, "num_processes", return_value=2)
     def test_num_model_replicas(self, mock_backend_num_processes):
@@ -383,20 +456,63 @@ class ModelParallelDistributionTest(testing.TestCase):
         layout = distribution.get_tensor_layout("/model/layer/other_tensor")
         self.assertIsNone(layout)
 
-    def test_get_variable_layout_with_explicit_layout(self):
+    def test_variable_layout_with_explicit_layout(self):
         layout_map = distribution_lib.LayoutMap(self.device_mesh)
-        layout_map[".*kernel"] = distribution_lib.TensorLayout([None, "model"])
+        layout_map[".*bias"] = distribution_lib.TensorLayout([None, "model"])
         distribution = distribution_lib.ModelParallel(
             layout_map=layout_map, batch_dim_name="data"
         )
+        explicit_layout = create_custom_layout()
 
-        explicit_mesh = distribution_lib.DeviceMesh((8,), ["x"], self.devices)
-        explicit_layout = distribution_lib.TensorLayout(["x"], explicit_mesh)
-        variable = backend.Variable(initializer=[1.0, 2.0, 3.0], name="kernel")
-        variable._layout = explicit_layout
-        variable_layout = distribution.get_variable_layout(variable)
-        self.assertIs(variable_layout.device_mesh, explicit_mesh)
-        self.assertEqual(variable_layout.axes, explicit_layout.axes)
+        with (
+            distribution.scope(),
+            mock.patch.object(
+                backend_dlib,
+                "_to_backend_mesh",
+                return_value=MockDeviceMesh(),
+            ),
+            mock.patch.object(
+                backend_dlib,
+                "distribute_tensor",
+                side_effect=lambda v, l: v,
+            ) as mock_distribute_tensor,
+        ):
+            backend.Variable(
+                shape=(3,),
+                initializer="ones",
+                layout=explicit_layout,
+                name="bias",
+            )
+            mock_distribute_tensor.assert_called_once()
+            _, actual_layout = mock_distribute_tensor.call_args.args
+            self.assertIs(actual_layout, explicit_layout)
+
+    def test_add_weight_layout_with_explicit_layout(self):
+        layout_map = distribution_lib.LayoutMap(self.device_mesh)
+        layout_map[".*bias"] = distribution_lib.TensorLayout([None, "model"])
+        distribution = distribution_lib.ModelParallel(
+            layout_map=layout_map, batch_dim_name="data"
+        )
+        explicit_layout = create_custom_layout()
+        layer = LayerWithLayout(layout=explicit_layout)
+
+        with (
+            distribution.scope(),
+            mock.patch.object(
+                backend_dlib,
+                "_to_backend_mesh",
+                return_value=MockDeviceMesh(),
+            ),
+            mock.patch.object(
+                backend_dlib,
+                "distribute_tensor",
+                side_effect=lambda v, l: v,
+            ) as mock_distribute_tensor,
+        ):
+            layer.build((8, explicit_layout.device_mesh.devices.size))
+            mock_distribute_tensor.assert_called_once()
+            _, actual_layout = mock_distribute_tensor.call_args.args
+            self.assertIs(actual_layout, explicit_layout)
 
     @mock.patch.object(backend_dlib, "num_processes", return_value=4)
     def test_num_processes_validation(self, mock_backend_num_processes):
