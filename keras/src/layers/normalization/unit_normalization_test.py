@@ -71,7 +71,6 @@ class UnitNormalizationTest(testing.TestCase):
         )
         layer = layers.UnitNormalization(axis=[1, 2])
 
-        # `fullgraph=True` crashes on graph break
         torch._dynamo.reset()
         compiled = torch.compile(layer, fullgraph=True, backend="eager")
         self.assertAllClose(compiled(x), layer(x))
