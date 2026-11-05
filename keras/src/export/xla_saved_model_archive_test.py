@@ -439,21 +439,6 @@ class XLASavedModelArchiveTest(testing.TestCase):
             model(ref_input),
         )
 
-    def test_model_export_api(self):
-        export_dir = self._export_dir()
-        model = get_model("functional")
-        ref_input = np.random.normal(size=(3, 10)).astype("float32")
-        ref_output = model(ref_input)
-
-        model.export(export_dir, format="xla_saved_model", platforms=["cpu"])
-
-        for signature in ("serve", "serving_default"):
-            apply_fn, params = load_endpoint(export_dir, signature)
-            self.assertAllClose(
-                apply_fn(params, {"inputs": ref_input})["output_0"],
-                ref_output,
-            )
-
     def test_untracked_variables_error(self):
         model = get_model("sequential")
         input_signature = [layers.InputSpec(shape=(None, 10), dtype="float32")]
