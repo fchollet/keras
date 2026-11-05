@@ -174,6 +174,26 @@ class CompileOverridingSequential(keras.Sequential):
 
 
 @keras.saving.register_keras_serializable(package="my_custom_package")
+class CompileAndConfigOverridingModel(keras.Model):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.dense1 = MyDense(1)
+
+    def compile(self, *args, **kwargs):
+        super().compile(*args, **kwargs)
+
+    def get_compile_config(self):
+        return super().get_compile_config()
+
+    def compile_from_config(self, config):
+        config = keras.saving.deserialize_keras_object(config)
+        self.compile(**config)
+
+    def call(self, inputs):
+        return self.dense1(inputs)
+
+
+@keras.saving.register_keras_serializable(package="my_custom_package")
 class SubclassFunctional(keras.Model):
     """Subclassed functional identical to `_get_basic_functional_model`."""
 
@@ -516,7 +536,7 @@ class SavingTest(testing.TestCase):
         model.save(temp_filepath)
 
         with mock.patch.object(warnings, "warn") as mock_warn:
-            saving_lib.load_model(temp_filepath)
+            loaded_model = saving_lib.load_model(temp_filepath)
         if not mock_warn.call_args_list:
             raise AssertionError("Did not warn.")
         self.assertIn(
@@ -524,12 +544,43 @@ class SavingTest(testing.TestCase):
             "because the model's `compile()` method is custom. ",
             mock_warn.call_args_list[0][0][0],
         )
+        self.assertFalse(loaded_model.compiled)
+
+        if backend.backend() != "numpy":
+            if model_type == "subclassed":
+                x = np.ones((4, 4), dtype="float32")
+                y = np.ones((4, 1), dtype="float32")
+            else:
+                x = np.ones((4, 2), dtype="int32")
+                y = np.ones((4, 2, 1), dtype="float32")
+
+            with self.assertRaisesRegex(
+                ValueError,
+                r"You must call `compile\(\)` before using the model",
+            ):
+                loaded_model.fit(x, y, verbose=0)
+
+            loaded_model.compile("sgd", "mse")
+            self.assertTrue(loaded_model.compiled)
+            loaded_model.fit(x, y, epochs=1, verbose=0)
 
     def test_compile_overridden_warnings_sequential(self):
         self._test_compile_overridden_warnings("sequential")
 
     def test_compile_overridden_warnings_subclassed(self):
         self._test_compile_overridden_warnings("subclassed")
+
+    def test_compile_overridden_with_compile_from_config(self):
+        temp_filepath = os.path.join(self.get_temp_dir(), "my_model.keras")
+        model = CompileAndConfigOverridingModel()
+        model.compile(optimizer="sgd", loss="mse")
+        model.save(temp_filepath)
+
+        with mock.patch.object(warnings, "warn") as mock_warn:
+            loaded_model = saving_lib.load_model(temp_filepath)
+
+        self.assertEqual(len(mock_warn.call_args_list), 0)
+        self.assertTrue(loaded_model.compiled)
 
     def test_metadata(self):
         temp_filepath = Path(
