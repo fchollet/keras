@@ -10,6 +10,7 @@ from keras.src import tree
 from keras.src.backend.common import standardize_dtype
 from keras.src.backend.common.keras_tensor import KerasTensor
 from keras.src.testing.test_case import TestCase
+from keras.src.testing.test_utils import named_product
 
 # Input dtypes of the dtype tests. No 64-bit dtypes yet; torch also tests
 # float64 for multi-input ops, as the old `NumpyDtypeTest` did.
@@ -76,9 +77,7 @@ def named_dtype_combinations(num_inputs, ordered=False, dtypes=None):
 class OpTest(TestCase):
     """Standard tests of an op, driven by class attributes.
 
-    A subclass sets the attributes below and inherits the tests. The
-    abstract subclasses `UnaryOpTest`, `BinaryOpTest` and `ReductionOpTest`
-    add the standard inputs of their category and the dtype tests.
+    A subclass sets the attributes below and inherits the tests:
 
     - `test_eager`: for every case, the eager outputs equal `reference_fn`.
     - `test_eager_class`: the same, through `op_class(**kwargs)`.
@@ -86,9 +85,14 @@ class OpTest(TestCase):
       structure, dtypes and shapes of the eager outputs.
     - `test_symbolic_dynamic`: the same with every input dimension unknown,
       then with one unknown dimension at a time.
-    - `test_input_dtypes_<dtypes>` (abstract subclasses): with the arrays
-      of the first case cast to `dtypes`, the eager output dtypes equal
-      `jax_fn`'s and the symbolic output dtypes equal the eager ones.
+
+    `UnaryOpTest`, `BinaryOpTest` and `ReductionOpTest` also set the standard
+    inputs of their category and add one test per input dtype combination,
+    `test_input_dtypes_<dtypes>`: with the arrays of the first case cast to
+    `dtypes`, the eager output dtypes equal `jax_fn`'s and the symbolic
+    output dtypes equal the eager ones. `BinaryOpTest` adds
+    `test_python_scalar_types_<dtype>_<side>` for a Python scalar operand.
+    Subclass one of them, or `OpTest` for an op that fits neither.
 
     Tensors under test go in `inputs`. `kwargs` are static arguments: they
     are passed unchanged to the op and to both references. A test defined
@@ -108,7 +112,7 @@ class OpTest(TestCase):
         run_dynamic_shape_checks: Disable for ops that need static sizes.
     """
 
-    __test__ = False  # Abstract. Subclasses that set `op` are collected.
+    __test__ = False  # Not collected by pytest; subclasses that set `op` are.
     op = None
     op_class = None
     reference_fn = None
@@ -259,11 +263,14 @@ class BinaryOpTest(OpTest):
     def test_input_dtypes(self, dtypes):
         self.check_input_dtypes(dtypes)
 
-    @parameterized.named_parameters(named_dtype_combinations(1))
-    def test_python_types(self, dtypes):
+    @parameterized.named_parameters(
+        named_product(dtype=DEFAULT_INPUT_DTYPES, scalar_side=["left", "right"])
+    )
+    def test_python_scalar_types(self, dtype, scalar_side):
         (x, _), kwargs = self._first_case()
         for scalar in (1, 1.0):
-            self.check_input_dtypes(dtypes, (x, scalar), kwargs)
+            inputs = (scalar, x) if scalar_side == "left" else (x, scalar)
+            self.check_input_dtypes((dtype,), inputs, kwargs)
 
 
 class ReductionOpTest(UnaryOpTest):

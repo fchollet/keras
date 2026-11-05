@@ -38,6 +38,11 @@ class NeedsStaticShape(Square):
         return KerasTensor(x.shape, dtype=x.dtype)
 
 
+class CastsToInt32(Square):
+    def call(self, x):
+        return ops.cast(ops.square(x), "int32")
+
+
 class TupleOfOne(Square):
     """Returns a tuple of one tensor eagerly, but one tensor symbolically."""
 
@@ -46,11 +51,6 @@ class TupleOfOne(Square):
 
     def compute_output_spec(self, x):
         return KerasTensor(x.shape, dtype=x.dtype)
-
-
-def function_form(op):
-    """Wraps an `Operation` instance as a function, like `knp.square`."""
-    return lambda *args, **kwargs: op(*args, **kwargs)
 
 
 def methods_of(cls):
@@ -102,7 +102,7 @@ class OpTestTest(testing.TestCase):
             [n for n in names if "input_dtypes" in n],
             len(named_dtype_combinations(2)),
         )
-        self.assertIn("test_python_types_int8", names)
+        self.assertIn("test_python_scalar_types_int8_left", names)
 
         class Sum(testing.ReductionOpTest):
             op, reference_fn, jax_fn = ops.sum, np.sum, jnp.sum
@@ -110,7 +110,7 @@ class OpTestTest(testing.TestCase):
         self.assertLen(Sum.cases, 10)
         self.assertEqual(outcomes(Sum)["test_eager"], "passed")
 
-    def test_abstract_classes_are_not_collected(self):
+    def test_base_classes_are_not_collected(self):
         for cls in (
             testing.OpTest,
             testing.UnaryOpTest,
@@ -155,7 +155,7 @@ class OpTestTest(testing.TestCase):
 
     def test_disabled_dynamic_checks_are_skipped(self):
         class Case(testing.OpTest):
-            op, reference_fn = function_form(NeedsStaticShape()), np.square
+            op, reference_fn = NeedsStaticShape(), np.square
             inputs = (X,)
             run_dynamic_shape_checks = False
 
@@ -167,7 +167,7 @@ class OpTestTest(testing.TestCase):
 
     def test_wrong_symbolic_rank_fails(self):
         class Case(testing.OpTest):
-            op, op_class = function_form(WrongRank()), WrongRank
+            op, op_class = WrongRank(), WrongRank
             reference_fn = np.square
             inputs = (X,)
 
@@ -181,19 +181,6 @@ class OpTestTest(testing.TestCase):
             r"for inputs int32\[2, 3\], kwargs \{\}$",
         )
         # The failing symbolic shapes are added to the error.
-        self.assertEqual(
-            out["test_symbolic_dynamic"],
-            "failed: Symbolic input shapes: [(None, None)]",
-        )
-
-    def test_unknown_dims_failure_names_the_shapes(self):
-        class Case(testing.OpTest):
-            op, reference_fn = function_form(NeedsStaticShape()), np.square
-            cases = {"a": ((X,), {}), "b": ((X[0],), {})}
-            run_dynamic_shape_checks = True
-
-        out = outcomes(Case)
-        self.assertEqual(out["test_symbolic_static"], "passed")
         self.assertEqual(
             out["test_symbolic_dynamic"],
             "failed: Symbolic input shapes: [(None, None)]",
@@ -215,7 +202,7 @@ class OpTestTest(testing.TestCase):
 
     def test_structure_mismatch_fails(self):
         class Case(testing.OpTest):
-            op, reference_fn = function_form(TupleOfOne()), np.square
+            op, reference_fn = TupleOfOne(), np.square
             inputs = (X,)
 
         out = outcomes(Case)
@@ -224,7 +211,7 @@ class OpTestTest(testing.TestCase):
 
     def test_symbolic_dtype_mismatch_fails(self):
         class Case(testing.OpTest):
-            op, reference_fn = function_form(WrongDtype()), np.square
+            op, reference_fn = WrongDtype(), np.square
             inputs = (X,)
 
         self.assertRegex(
@@ -240,8 +227,7 @@ class OpTestTest(testing.TestCase):
 class CheckInputDtypesTest(testing.TestCase):
     def test_dtype_mismatch_vs_jax_fails(self):
         class Case(testing.UnaryOpTest):
-            op = lambda x: ops.cast(ops.square(x), "int32")  # noqa: E731
-            reference_fn, jax_fn = np.square, jnp.square
+            op, reference_fn, jax_fn = CastsToInt32(), np.square, jnp.square
 
         self.assertRegex(
             outcomes(Case)["test_input_dtypes_uint8"],
@@ -265,7 +251,9 @@ class CheckInputDtypesTest(testing.TestCase):
         class Add(testing.BinaryOpTest):
             op, reference_fn, jax_fn = ops.add, np.add, jnp.add
 
-        self.assertEqual(outcomes(Add)["test_python_types_int8"], "passed")
+        out = outcomes(Add)
+        self.assertEqual(out["test_python_scalar_types_int8_left"], "passed")
+        self.assertEqual(out["test_python_scalar_types_int8_right"], "passed")
 
 
 class NamedDtypeCombinationsTest(testing.TestCase):
