@@ -32,7 +32,7 @@ jobs:
         (
           (github.event_name == 'issues' || github.event_name == 'issue_comment') &&
           (github.event_name != 'issue_comment' || (
-            (contains(github.event.comment.body, '@keras-team/triage') || contains(github.event.comment.body, '@keras-team /triage')) &&
+            contains(github.event.comment.body, '/triage') &&
             (github.event.comment.author_association == 'OWNER' || github.event.comment.author_association == 'MEMBER' || github.event.comment.author_association == 'COLLABORATOR')
           ))
         )
