@@ -62,6 +62,17 @@ class Dense(Layer):
             trainable matrices) during the forward pass. The delta is scaled by
             `lora_alpha / lora_rank`, allowing you to fine-tune the strength of
             the LoRA adjustment independently of `lora_rank`.
+        dora_rank: Optional integer. If set, the layer's forward pass
+            will implement DoRA (Weight-Decomposed Low-Rank Adaptation)
+            with the provided rank. DoRA decomposes the layer's kernel
+            into magnitude and direction components and applies LoRA
+            to the direction component. This can improve the learning
+            capacity of LoRA. You can also enable DoRA on an existing
+            `Dense` layer by calling `layer.enable_dora(rank)`.
+        dora_alpha: Optional integer. If set, this parameter scales the
+            low-rank adaptation delta during the forward pass. The delta
+            is scaled by `dora_alpha / dora_rank`, allowing you to fine-tune
+            the strength of the DoRA adjustment independently of `dora_rank`.
 
     Input shape:
         N-D tensor with shape: `(batch_size, ..., input_dim)`.
@@ -88,6 +99,8 @@ class Dense(Layer):
         bias_constraint=None,
         lora_rank=None,
         lora_alpha=None,
+        dora_rank=None,
+        dora_alpha=None,
         quantization_config=None,
         **kwargs,
     ):
@@ -109,7 +122,14 @@ class Dense(Layer):
         self.bias_constraint = constraints.get(bias_constraint)
         self.lora_rank = lora_rank
         self.lora_alpha = lora_alpha if lora_alpha is not None else lora_rank
+        self.dora_rank = dora_rank
+        self.dora_alpha = dora_alpha if dora_alpha is not None else dora_rank
+        if self.lora_rank and self.dora_rank:
+            raise ValueError(
+                "Only one of `lora_rank` or `dora_rank` can be set."
+            )
         self.lora_enabled = False
+        self.dora_enabled = False
         self.quantization_config = quantization_config
         self.input_spec = InputSpec(min_ndim=2)
         self.supports_masking = True
@@ -156,6 +176,8 @@ class Dense(Layer):
         self.built = True
         if self.lora_rank:
             self.enable_lora(self.lora_rank, lora_alpha=self.lora_alpha)
+        if self.dora_rank:
+            self.enable_dora(self.dora_rank, dora_alpha=self.dora_alpha)
 
     @property
     def kernel(self):
@@ -182,6 +204,15 @@ class Dense(Layer):
                 ),
                 dtype=self.compute_dtype,
             )
+        elif self.dora_enabled:
+            lora_delta = (self.dora_alpha / self.dora_rank) * ops.matmul(
+                self.dora_kernel_a, self.dora_kernel_b
+            )
+            W_combined = ops.add(kernel, lora_delta)
+            # Normalize along input dimension (axis 0)
+            norm = ops.sqrt(ops.sum(ops.square(W_combined), axis=0))
+            kernel = self.dora_magnitude * ops.divide_no_nan(W_combined, norm)
+            kernel = ops.cast(kernel, dtype=self.compute_dtype)
 
         return kernel
 
@@ -219,6 +250,8 @@ class Dense(Layer):
             raise ValueError(
                 "lora is already enabled. This can only be done once per layer."
             )
+        if self.dora_enabled:
+            raise ValueError("dora is already enabled. Cannot enable LoRA.")
         if self.quantization_mode == "gptq":
             raise NotImplementedError(
                 "lora is not currently supported with GPTQ quantization."
@@ -253,11 +286,85 @@ class Dense(Layer):
         self.lora_rank = rank
         self.lora_alpha = lora_alpha if lora_alpha is not None else rank
 
+    def enable_dora(
+        self,
+        rank,
+        dora_alpha=None,
+        a_initializer="he_uniform",
+        b_initializer="zeros",
+    ):
+        if self.kernel_constraint:
+            raise ValueError(
+                "DoRA is incompatible with kernel constraints. "
+                "In order to enable dora on this layer, remove the "
+                "`kernel_constraint` argument."
+            )
+        if not self.built:
+            raise ValueError(
+                "Cannot enable dora on a layer that isn't yet built."
+            )
+        if self.lora_enabled:
+            raise ValueError("LoRA is already enabled. Cannot enable DoRA.")
+        if self.dora_enabled:
+            raise ValueError(
+                "dora is already enabled. This can only be done once per layer."
+            )
+        if self.quantization_mode is not None:
+            raise NotImplementedError(
+                "DoRA is not currently supported with quantized layers."
+            )
+        self._tracker.unlock()
+        if self.quantization_mode == "int4" and hasattr(
+            self, "_orig_input_dim"
+        ):
+            input_dim_for_lora = self._orig_input_dim
+        else:
+            input_dim_for_lora = self.kernel.shape[0]
+
+        self.dora_kernel_a = self.add_weight(
+            name="dora_kernel_a",
+            shape=(input_dim_for_lora, rank),
+            initializer=initializers.get(a_initializer),
+            dtype="float32",
+            regularizer=self.kernel_regularizer,
+        )
+        self.dora_kernel_b = self.add_weight(
+            name="dora_kernel_b",
+            shape=(rank, self.kernel.shape[1]),
+            initializer=initializers.get(b_initializer),
+            dtype="float32",
+            regularizer=self.kernel_regularizer,
+        )
+        # Initialize Magnitude Vector to norm of frozen kernel
+        # We reduce all axes except the last one (units)
+        initial_magnitude = ops.sqrt(ops.sum(ops.square(self.kernel), axis=0))
+        self.dora_magnitude = self.add_weight(
+            name="dora_magnitude",
+            shape=(self.units,),
+            initializer=initializers.Constant(initial_magnitude),
+            dtype="float32",
+            regularizer=self.kernel_regularizer,
+        )
+
+        self._kernel.trainable = False
+        self._tracker.lock()
+        self.dora_enabled = True
+        self.dora_rank = rank
+        self.dora_alpha = dora_alpha if dora_alpha is not None else rank
+
     def save_own_variables(self, store):
         self._save_serialized_variables(store, "kernel")
 
     def load_own_variables(self, store):
-        self._load_serialized_variables(store, "kernel")
+        self._load_serialized_variables(
+            store, "kernel", check_variable_count=not self.dora_enabled
+        )
+        if self.dora_enabled:
+            self.dora_kernel_a.assign(ops.zeros(self.dora_kernel_a.shape))
+            self.dora_kernel_b.assign(ops.zeros(self.dora_kernel_b.shape))
+            self.dora_magnitude.assign(
+                ops.sqrt(ops.sum(ops.square(self._kernel), axis=0))
+            )
 
     def get_config(self):
         base_config = super().get_config()
@@ -282,6 +389,9 @@ class Dense(Layer):
         if self.lora_rank:
             config["lora_rank"] = self.lora_rank
             config["lora_alpha"] = self.lora_alpha
+        if self.dora_rank:
+            config["dora_rank"] = self.dora_rank
+            config["dora_alpha"] = self.dora_alpha
         return {**base_config, **config}
 
     @classmethod

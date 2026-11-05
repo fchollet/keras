@@ -461,6 +461,158 @@ class DenseTest(testing.TestCase):
         with self.assertRaisesRegex(ValueError, "lora is already enabled"):
             layer.enable_lora(rank=2)
 
+    @pytest.mark.requires_trainable_backend
+    def test_enable_dora(self):
+        layer = layers.Dense(units=16)
+        layer.build((None, 8))
+        layer.enable_dora(4)
+        self.assertLen(layer.trainable_weights, 4)
+        self.assertLen(layer.non_trainable_weights, 1)
+        if backend.backend() == "torch":
+            self.assertLen(layer.torch_params, 5)
+        self.assertDType(layer.dora_kernel_a, "float32")
+        self.assertDType(layer.dora_kernel_b, "float32")
+        self.assertDType(layer.dora_magnitude, "float32")
+
+        # Try eager call
+        x = np.random.random((64, 8))
+        y = np.random.random((64, 16))
+        _ = layer(x[:2])
+
+        init_dora_a_kernel_value = layer.dora_kernel_a.numpy()
+        init_dora_b_kernel_value = layer.dora_kernel_b.numpy()
+        init_dora_magnitude_value = layer.dora_magnitude.numpy()
+
+        # Try calling fit()
+        model = models.Sequential([layer])
+        model.compile(optimizer="sgd", loss="mse")
+        model.fit(x, y)
+
+        final_dora_a_kernel_value = layer.dora_kernel_a.numpy()
+        final_dora_b_kernel_value = layer.dora_kernel_b.numpy()
+        final_dora_magnitude_value = layer.dora_magnitude.numpy()
+
+        diff_a = np.max(
+            np.abs(init_dora_a_kernel_value - final_dora_a_kernel_value)
+        )
+        diff_b = np.max(
+            np.abs(init_dora_b_kernel_value - final_dora_b_kernel_value)
+        )
+        diff_m = np.max(
+            np.abs(init_dora_magnitude_value - final_dora_magnitude_value)
+        )
+
+        self.assertGreater(diff_a, 0.0)
+        self.assertGreater(diff_b, 0.0)
+        self.assertGreater(diff_m, 0.0)
+
+        # Try saving and reloading the model
+        temp_filepath = os.path.join(self.get_temp_dir(), "dora_model.keras")
+        model.save(temp_filepath)
+
+        new_model = saving.load_model(temp_filepath)
+        self.assertTrue(new_model.layers[0].dora_enabled)
+        self.assertAllClose(model.predict(x), new_model.predict(x))
+
+        # Try saving and reloading the model's weights only
+        temp_filepath = os.path.join(
+            self.get_temp_dir(), "dora_model.weights.h5"
+        )
+        model.save_weights(temp_filepath)
+
+        # Load the file into a fresh, non-dora model
+        new_model = models.Sequential([layers.Dense(units=16)])
+        new_model.build((None, 8))
+        new_model.load_weights(temp_filepath)
+        self.assertAllClose(model.predict(x), new_model.predict(x))
+
+        # Try loading a normal checkpoint into a dora model
+        new_model.save_weights(temp_filepath)
+        model.load_weights(temp_filepath)
+        self.assertAllClose(model.predict(x), new_model.predict(x))
+
+    def test_enable_dora_with_alpha(self):
+        layer = layers.Dense(units=8)
+        layer.build((None, 4))
+
+        # Enable DoRA with `rank`=2 and `dora_alpha`=3.0.
+        layer.enable_dora(2, dora_alpha=3.0)
+        self.assertEqual(layer.dora_rank, 2)
+        self.assertEqual(layer.dora_alpha, 3.0)
+
+        # Manually compute the expected effective kernel
+        base_kernel = ops.convert_to_numpy(layer._kernel)
+        dora_update = np.matmul(
+            ops.convert_to_numpy(layer.dora_kernel_a),
+            ops.convert_to_numpy(layer.dora_kernel_b),
+        )
+        W_combined = base_kernel + (3.0 / 2) * dora_update
+        norm = np.sqrt(np.sum(np.square(W_combined), axis=0))
+        effective_kernel_expected = ops.convert_to_numpy(
+            layer.dora_magnitude
+        ) * (W_combined / norm)
+
+        # Verify that the effective kernel matches expectation.
+        self.assertAllClose(
+            ops.convert_to_numpy(layer.kernel), effective_kernel_expected
+        )
+
+    def test_dora_rank_argument(self):
+        self.run_layer_test(
+            layers.Dense,
+            init_kwargs={
+                "units": 5,
+                "activation": "sigmoid",
+                "kernel_regularizer": "l2",
+                "dora_rank": 2,
+            },
+            input_shape=(2, 3, 4),
+            expected_output_shape=(2, 3, 5),
+            expected_num_trainable_weights=4,
+            expected_num_non_trainable_weights=1,
+            expected_num_seed_generators=0,
+            expected_num_losses=3,
+            supports_masking=True,
+        )
+
+    def test_enable_dora_with_kernel_constraint(self):
+        layer = layers.Dense(units=2, kernel_constraint="max_norm")
+        with self.assertRaisesRegex(
+            ValueError, "DoRA is incompatible with kernel constraints"
+        ):
+            layer.enable_dora(rank=2)
+
+    def test_enable_dora_on_unbuilt_layer(self):
+        layer = layers.Dense(units=2)
+        with self.assertRaisesRegex(
+            ValueError, "Cannot enable dora on a layer that isn't yet built"
+        ):
+            layer.enable_dora(rank=2)
+
+    def test_enable_dora_when_already_enabled(self):
+        layer = layers.Dense(units=2)
+        layer.build((None, 2))
+        layer.enable_dora(rank=2)
+        with self.assertRaisesRegex(ValueError, "dora is already enabled"):
+            layer.enable_dora(rank=2)
+
+    def test_dora_lora_mutual_exclusivity(self):
+        layer = layers.Dense(units=2)
+        layer.build((None, 2))
+        layer.enable_lora(rank=2)
+        with self.assertRaisesRegex(
+            ValueError, "LoRA is already enabled. Cannot enable DoRA."
+        ):
+            layer.enable_dora(rank=2)
+
+        layer2 = layers.Dense(units=2)
+        layer2.build((None, 2))
+        layer2.enable_dora(rank=2)
+        with self.assertRaisesRegex(
+            ValueError, "dora is already enabled. Cannot enable LoRA."
+        ):
+            layer2.enable_lora(rank=2)
+
     # Test quantization-related methods.
 
     @parameterized.named_parameters(
