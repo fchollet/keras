@@ -30,6 +30,7 @@ class GlobalAveragePooling1D(BaseGlobalPooling):
         inputs: A 3D tensor.
         mask: Binary tensor of shape `(batch_size, steps)` indicating whether
             a given step should be masked (excluded from the average).
+            Fully masked samples return zeros.
 
     Input shape:
 
@@ -76,9 +77,14 @@ class GlobalAveragePooling1D(BaseGlobalPooling):
             mask_expanded = ops.cast(mask_expanded, "bool")
             inputs = ops.where(mask_expanded, inputs, 0)
             float_mask = ops.cast(mask_expanded, inputs.dtype)
-            return ops.sum(
-                inputs, axis=steps_axis, keepdims=self.keepdims
-            ) / ops.sum(float_mask, axis=steps_axis, keepdims=self.keepdims)
+            mask_count = ops.sum(
+                float_mask, axis=steps_axis, keepdims=self.keepdims
+            )
+            mask_count = ops.where(mask_count == 0, 1, mask_count)
+            return (
+                ops.sum(inputs, axis=steps_axis, keepdims=self.keepdims)
+                / mask_count
+            )
         else:
             return ops.mean(inputs, axis=steps_axis, keepdims=self.keepdims)
 

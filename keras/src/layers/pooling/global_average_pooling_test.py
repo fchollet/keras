@@ -2,6 +2,7 @@ import numpy as np
 from absl.testing import parameterized
 
 from keras.src import layers
+from keras.src import models
 from keras.src import testing
 
 
@@ -89,6 +90,50 @@ class GlobalAveragePoolingBasicTest(testing.TestCase):
 
 
 class GlobalAveragePoolingCorrectnessTest(testing.TestCase):
+    @parameterized.product(
+        data_format=["channels_last", "channels_first"],
+        keepdims=[False, True],
+        dtype=["float32", "float64"],
+    )
+    def test_global_average_pooling1d_fully_masked(
+        self, data_format, keepdims, dtype
+    ):
+        inputs = np.arange(18, dtype=dtype).reshape((3, 3, 2))
+        mask = np.array(
+            [[True, True, False], [False, False, False], [True, True, True]]
+        )
+        expected = np.array([[1.0, 2.0], [0.0, 0.0], [14.0, 15.0]])
+        if data_format == "channels_first":
+            inputs = np.transpose(inputs, (0, 2, 1))
+        if keepdims:
+            expected = np.expand_dims(
+                expected, 1 if data_format == "channels_last" else 2
+            )
+        layer = layers.GlobalAveragePooling1D(
+            data_format=data_format, keepdims=keepdims, dtype=dtype
+        )
+        outputs = layer(inputs, mask=mask)
+        self.assertAllClose(outputs, expected)
+        self.assertEqual(outputs.dtype, layer(inputs).dtype)
+
+    @parameterized.parameters(False, True)
+    def test_global_average_pooling1d_fully_masked_embedding(self, keepdims):
+        model = models.Sequential(
+            [
+                layers.Embedding(
+                    input_dim=4,
+                    output_dim=2,
+                    mask_zero=True,
+                    embeddings_initializer="ones",
+                ),
+                layers.GlobalAveragePooling1D(keepdims=keepdims),
+            ]
+        )
+        expected = np.array([[1.0, 1.0], [0.0, 0.0]])
+        if keepdims:
+            expected = np.expand_dims(expected, 1)
+        self.assertAllClose(model(np.array([[1, 2, 0], [0, 0, 0]])), expected)
+
     @parameterized.parameters(
         ("channels_last", False),
         ("channels_last", True),
