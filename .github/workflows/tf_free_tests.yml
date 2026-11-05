@@ -41,7 +41,16 @@ jobs:
           python -c "import importlib.util, sys; sys.exit(importlib.util.find_spec('tensorflow') is not None)"
 
       - name: Run Tests
+        shell: bash
         run: |
+          ignored_files=()
+          while IFS= read -r line; do
+            case "$line" in
+              "" | "#"* | *::*) ;;
+              *) ignored_files+=(--ignore "$line") ;;
+            esac
+          done < .github/workflows/config/tf_free_ignored_tests.txt
           pytest keras -n 12 --dist loadfile \
             --ignore keras/src/applications \
-            --ignore keras/src/wrappers
+            --ignore keras/src/wrappers \
+            "${ignored_files[@]}"

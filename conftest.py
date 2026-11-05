@@ -16,11 +16,6 @@ from keras.src.backend.config import backend  # noqa: E402
 from keras.src.utils import module_utils
 from keras.src.utils.module_utils import get_pluggable_backend_module
 
-TF_FREE_IGNORED_TESTS_PATH = os.path.join(
-    os.path.dirname(__file__),
-    ".github/workflows/config/tf_free_ignored_tests.txt",
-)
-
 
 def pytest_configure(config):
     config.addinivalue_line(
@@ -70,7 +65,12 @@ def pytest_collection_modifyitems(config, items):
 
     tf_free_skipped_tests = set()
     if not module_utils.tensorflow.available:
-        tf_free_skipped_tests = read_test_list(TF_FREE_IGNORED_TESTS_PATH)
+        tf_free_skipped_tests = read_test_list(
+            os.path.join(
+                os.path.dirname(__file__),
+                ".github/workflows/config/tf_free_ignored_tests.txt",
+            )
+        )
 
     if backend() == "jax":
         import jax
@@ -127,15 +127,6 @@ def read_test_list(path):
             for line in file.readlines()
             if (stripped := line.strip()) and not stripped.startswith("#")
         }
-
-
-collect_ignore = []
-if not module_utils.tensorflow.available:
-    collect_ignore = [
-        path
-        for path in read_test_list(TF_FREE_IGNORED_TESTS_PATH)
-        if "::" not in path
-    ]
 
 
 def skip_if_backend(given_backend, reason):
