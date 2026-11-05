@@ -2940,7 +2940,12 @@ def roll(x, shift, axis=None):
     if axis is not None:
         # `tf.roll` requires `shift` and `axis` to have the same length,
         # while numpy broadcasts them against each other.
-        shifts, axes = normalize_shift_and_axis(shift, axis)
+        if tf.is_tensor(shift) or tf.is_tensor(axis):
+            shape = tf.broadcast_dynamic_shape(tf.shape(shift), tf.shape(axis))
+            shifts = tf.broadcast_to(shift, shape)
+            axes = tf.broadcast_to(axis, shape)
+        else:
+            shifts, axes = normalize_shift_and_axis(shift, axis)
         return tf.roll(x, shift=shifts, axis=axes)
 
     # If axis is None, the roll happens as a 1-d tensor.
