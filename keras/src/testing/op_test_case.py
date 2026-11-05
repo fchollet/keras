@@ -204,8 +204,8 @@ class OpTest(TestCase):
         symbolic = self.op(*symbolic_inputs, **kwargs)
         eager = self.op(*_with_arrays(inputs, tensors), **kwargs)
         msg = (
-            f"Output differs: symbolic={_signature(symbolic)}, "
-            f"eager={_signature(eager)} "
+            f"Output differs: symbolic={_format_specs(symbolic)}, "
+            f"eager={_format_specs(eager)} "
             f"for {_describe(symbolic_inputs, kwargs)}"
         )
         tree.assert_same_structure(symbolic, eager)
@@ -287,6 +287,7 @@ class ReductionOpTest(UnaryOpTest):
             ("axis1", 1),
             ("last", -1),
             ("axes01", (0, 1)),
+            ("no_axis", ()),  # Reduces over no axis: the output is the input.
         ]
         for keepdims in (False, True)
     }
@@ -318,7 +319,7 @@ def _symbolic_matches(symbolic, eager):
     """Whether a `KerasTensor` has the dtype and known dims of a tensor."""
     return (
         isinstance(symbolic, KerasTensor)
-        and standardize_dtype(symbolic.dtype) == standardize_dtype(eager.dtype)
+        and symbolic.dtype == standardize_dtype(eager.dtype)
         and len(symbolic.shape) == len(eager.shape)
         and all(s in (None, e) for s, e in zip(symbolic.shape, eager.shape))
     )
@@ -338,7 +339,7 @@ def _one_dim_unknown(shapes):
     return variants
 
 
-def _signature(values):
+def _format_specs(values):
     """Describes inputs or outputs for messages, e.g. `int32[2, 3], 1.0`."""
     return ", ".join(
         f"{standardize_dtype(x.dtype)}{list(x.shape)}"
@@ -349,4 +350,4 @@ def _signature(values):
 
 
 def _describe(inputs, kwargs):
-    return f"inputs {_signature(inputs)}, kwargs {kwargs}"
+    return f"inputs {_format_specs(inputs)}, kwargs {kwargs}"

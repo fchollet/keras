@@ -13637,9 +13637,11 @@ class AddTest(testing.BinaryOpTest):
     op, op_class = knp.add, knp.Add
     reference_fn, jax_fn = np.add, jnp.add
 
+    @pytest.mark.skipif(
+        backend.backend() == "tensorflow",
+        reason="TODO: `tf.add` has no bool kernel.",
+    )
     def test_input_dtypes_bool_bool(self):
-        if backend.backend() == "tensorflow":
-            self.skipTest("TODO: `tf.add` has no bool kernel.")
         self.check_input_dtypes(("bool", "bool"))
 
     def test_incompatible_shapes(self):
@@ -13717,13 +13719,13 @@ class PowerTest(testing.BinaryOpTest):
 class SumTest(testing.ReductionOpTest):
     op, op_class = knp.sum, knp.Sum
     reference_fn, jax_fn = np.sum, jnp.sum
-    cases = {**testing.ReductionOpTest.cases, "no_axis": ((X,), {"axis": ()})}
 
+    @pytest.mark.skipif(
+        backend.backend() == "torch",
+        reason="`Sum.compute_output_spec` returns int32 on torch, which has no "
+        "uint32; JAX returns uint32.",
+    )
     def test_input_dtypes_uint8(self):
-        if backend.backend() == "torch":
-            # `Sum.compute_output_spec` returns int32 on torch, which has no
-            # uint32; JAX returns uint32.
-            self.skipTest("torch has no uint32")
         self.check_input_dtypes(("uint8",))
 
 

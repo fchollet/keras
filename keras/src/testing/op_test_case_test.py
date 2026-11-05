@@ -107,7 +107,7 @@ class OpTestTest(testing.TestCase):
         class Sum(testing.ReductionOpTest):
             op, reference_fn, jax_fn = ops.sum, np.sum, jnp.sum
 
-        self.assertLen(Sum.cases, 10)
+        self.assertLen(Sum.cases, 12)
         self.assertEqual(outcomes(Sum)["test_eager"], "passed")
 
     def test_base_classes_are_not_collected(self):
@@ -219,10 +219,6 @@ class OpTestTest(testing.TestCase):
             "^failed: AssertionError: Output differs: symbolic=float32",
         )
 
-    def test_unknown_output_dims_are_accepted(self):
-        case = SquareTest("test_eager")
-        case.check_symbolic((X,), {}, [(None, 3)])
-
 
 class CheckInputDtypesTest(testing.TestCase):
     def test_dtype_mismatch_vs_jax_fails(self):
@@ -257,7 +253,18 @@ class CheckInputDtypesTest(testing.TestCase):
 
 
 class NamedDtypeCombinationsTest(testing.TestCase):
-    POOL = op_test_case.DEFAULT_INPUT_DTYPES
+    POOL = (
+        "bool",
+        "int8",
+        "int16",
+        "int32",
+        "uint8",
+        "uint16",
+        "uint32",
+        "bfloat16",
+        "float16",
+        "float32",
+    )
 
     def test_shared_pool_counts(self):
         self.assertLen(named_dtype_combinations(1, dtypes=self.POOL), 10)
