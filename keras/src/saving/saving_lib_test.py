@@ -62,6 +62,13 @@ class MyDense(keras.layers.Layer):
 
 
 @keras.saving.register_keras_serializable(package="my_custom_package")
+class DenseWithFailingFromConfig(keras.layers.Dense):
+    @classmethod
+    def from_config(cls, config):
+        raise ValueError("DenseWithFailingFromConfig.from_config raises")
+
+
+@keras.saving.register_keras_serializable(package="my_custom_package")
 class AddWeightInInitLayer(keras.layers.Layer):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -162,7 +169,12 @@ class ModelWithSerializedLayer(keras.Model):
 
     @classmethod
     def from_config(cls, config):
-        config["layer"] = saving_lib.deserialize_keras_object(config["layer"])
+        try:
+            config["layer"] = saving_lib.deserialize_keras_object(
+                config["layer"]
+            )
+        except:
+            config["layer"] = DenseWithFailingFromConfig(1, name="dense")
         return super().from_config(config)
 
 
@@ -272,6 +284,20 @@ def _get_subclassed_model_with_nested(compile=True):
 def _get_subclassed_model_with_serialized_nested(compile=True):
     model = ModelWithSerializedLayer(
         keras.layers.Dense(1, name="dense"), name="model_with_serialized"
+    )
+    if compile:
+        model.compile(
+            optimizer="adam",
+            loss=my_mean_squared_error,
+            metrics=[keras.metrics.Hinge(), "mse"],
+        )
+    return model
+
+
+def _get_subclassed_model_with_nested_raising_from_config(compile=True):
+    model = ModelWithSerializedLayer(
+        DenseWithFailingFromConfig(1, name="dense"),
+        name="model_with_serialized_from_config_raises",
     )
     if compile:
         model.compile(
@@ -443,6 +469,10 @@ class SavingTest(testing.TestCase):
         (
             "subclassed_with_serialized",
             _get_subclassed_model_with_serialized_nested,
+        ),
+        (
+            "subclassed_model_with_nested_raising_from_config",
+            _get_subclassed_model_with_nested_raising_from_config,
         ),
         ("basic_sequential", _get_basic_sequential_model),
         ("basic_functional", _get_basic_functional_model),

@@ -175,10 +175,6 @@ class DeferredBuildScope:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if exc_type is not None:
-            self.set_state(None)
-            return
-
         self.set_state(self.parent)
         if self.parent is None:
             # This was the last scope in the stack, build everything now.
