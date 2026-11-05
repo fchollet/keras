@@ -1646,6 +1646,43 @@ class SavingH5IOStoreTest(testing.TestCase):
         revived_layer.lora_kernel_b.assign(lora_kernel_b)
         self.assertAllClose(revived_layer(ref_input), ref_output, atol=1e-6)
 
+    def test_h5_io_store_dora(self):
+        # For `keras_hub.models.backbone.save_dora_weights` and
+        # `keras_hub.models.backbone.load_dora_weights`
+        temp_filepath = Path(os.path.join(self.get_temp_dir(), "layer.dora.h5"))
+        layer = keras.layers.Dense(units=16)
+        layer.build((None, 8))
+        layer.enable_dora(4)
+
+        ref_input = np.random.random((1, 8)).astype("float32")
+        ref_output = layer(ref_input)
+
+        # Save the DoRA weights.
+        store = saving_lib.H5IOStore(temp_filepath, mode="w")
+        dora_store = store.make("dora")
+        dora_store["rank"] = layer.dora_rank
+        inner_store = store.make("dora/0")
+        inner_store["dora_kernel_a"] = layer.dora_kernel_a
+        inner_store["dora_kernel_b"] = layer.dora_kernel_b
+        inner_store["dora_magnitude"] = layer.dora_magnitude
+        store.close()
+
+        # Load the DoRA weights.
+        revived_layer = keras.layers.Dense(units=16)
+        revived_layer.build((None, 8))
+        store = saving_lib.H5IOStore(temp_filepath, mode="r")
+        dora_store = store.get("dora")
+        revived_layer.enable_dora(int(dora_store["rank"][()]))
+        dora_kernel_a = store.get("dora/0")["dora_kernel_a"]
+        dora_kernel_b = store.get("dora/0")["dora_kernel_b"]
+        dora_magnitude = store.get("dora/0")["dora_magnitude"]
+        revived_layer._kernel.assign(layer._kernel)
+        revived_layer.bias.assign(layer.bias)
+        revived_layer.dora_kernel_a.assign(dora_kernel_a)
+        revived_layer.dora_kernel_b.assign(dora_kernel_b)
+        revived_layer.dora_magnitude.assign(dora_magnitude)
+        self.assertAllClose(revived_layer(ref_input), ref_output, atol=1e-6)
+
     def test_h5_io_store_exception_raised(self):
         temp_filepath = Path(os.path.join(self.get_temp_dir(), "store.h5"))
 
