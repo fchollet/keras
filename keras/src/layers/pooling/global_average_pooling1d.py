@@ -76,10 +76,13 @@ class GlobalAveragePooling1D(BaseGlobalPooling):
             mask_expanded = backend.ops.cast(mask_expanded, "bool")
             inputs = backend.ops.numpy.where(mask_expanded, inputs, 0)
             float_mask = backend.ops.cast(mask_expanded, inputs.dtype)
-            return backend.ops.numpy.sum(
-                inputs, axis=steps_axis, keepdims=self.keepdims
-            ) / backend.ops.numpy.sum(
-                float_mask, axis=steps_axis, keepdims=self.keepdims
+            return backend.ops.numpy.divide_no_nan(
+                backend.ops.numpy.sum(
+                    inputs, axis=steps_axis, keepdims=self.keepdims
+                ),
+                backend.ops.numpy.sum(
+                    float_mask, axis=steps_axis, keepdims=self.keepdims
+                ),
             )
         else:
             return backend.ops.numpy.mean(
