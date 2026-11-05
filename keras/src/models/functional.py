@@ -576,6 +576,19 @@ def functional_from_config(cls, config, custom_objects=None):
     Returns:
         An instance of `cls`.
     """
+    # Layers are instantiated inside the scope that
+    # `deserialize_keras_object()` opens, but that scope is already closed by
+    # the time the layers are called to rebuild the graph, and a direct
+    # `Model.from_config()` call opens no scope at all. Establish one here so
+    # that safe mode also covers the layer calls. `None` means "no scope", so
+    # only an explicit `False` opts out.
+    with serialization_lib.SafeModeScope(
+        serialization_lib.in_safe_mode() is not False
+    ):
+        return _functional_from_config(cls, config, custom_objects)
+
+
+def _functional_from_config(cls, config, custom_objects=None):
     # Layer instances created during
     # the graph reconstruction process
     created_layers = {}

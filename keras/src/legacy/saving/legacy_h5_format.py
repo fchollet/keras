@@ -134,7 +134,9 @@ def load_model_from_hdf5(
         model_config = json_utils.decode(model_config)
 
         legacy_scope = saving_options.keras_option_scope(use_legacy_config=True)
-        safe_mode_scope = serialization_lib.SafeModeScope(safe_mode)
+        safe_mode_scope = serialization_lib.SafeModeScope(
+            safe_mode is not False
+        )
         with legacy_scope, safe_mode_scope:
             model = saving_utils.model_from_config(
                 model_config, custom_objects=custom_objects

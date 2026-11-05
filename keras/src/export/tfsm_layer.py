@@ -44,6 +44,20 @@ class TFSMLayer(layers.Layer):
     in `__call__()`), make sure that the training-time call function is
     saved as a standalone endpoint in the artifact, and provide its name
     to the `TFSMLayer` via the `call_training_endpoint` argument.
+
+    **Safe mode:**
+
+    Instantiating a `TFSMLayer` loads an external SavedModel, which carries a
+    potential risk of arbitrary code execution. The constructor therefore
+    raises a `ValueError` when it runs while safe mode is active, that is,
+    during a deserialization performed with the default `safe_mode=True`. This
+    covers a `TFSMLayer` reconstructed from a config as well as one
+    constructed by a custom layer, model or metric that is itself being
+    deserialized -- including `keras.models.clone_model()` of such a
+    subclassed model, which offers no `safe_mode` argument. To load these
+    artifacts, pass `safe_mode=False` to the loading function or call
+    `keras.config.enable_unsafe_deserialization()`. Constructing a `TFSMLayer`
+    outside of deserialization is not affected.
     """
 
     def __init__(
@@ -59,6 +73,25 @@ class TFSMLayer(layers.Layer):
             raise NotImplementedError(
                 "The TFSMLayer is only currently supported with the "
                 "TensorFlow backend."
+            )
+
+        # Guard the load itself: deserialization can invoke the constructor
+        # without going through `from_config()`, e.g. via a serialized
+        # callable or via a custom layer that forwards a config value to
+        # `TFSMLayer(filepath)`. A construction by a custom layer, model or
+        # metric that is itself being deserialized in safe mode is also
+        # rejected and needs `safe_mode=False`. Direct construction outside
+        # a deserialization scope is allowed.
+        if serialization_lib.in_safe_mode():
+            raise ValueError(
+                "Requested the deserialization of a `TFSMLayer`, which "
+                "loads an external SavedModel. This carries a potential risk "
+                "of arbitrary code execution and thus it is disallowed by "
+                "default. If you trust the source of the artifact, you can "
+                "override this error by passing `safe_mode=False` to the "
+                "loading function, or calling "
+                "`keras.config.enable_unsafe_deserialization()`. "
+                f"SavedModel filepath: '{filepath}'"
             )
 
         # Initialize an empty layer, then add_weight() etc. as needed.
@@ -161,22 +194,13 @@ class TFSMLayer(layers.Layer):
         Returns:
             A TFSMLayer instance.
         """
-        # Follow the same pattern as Lambda layer for safe_mode handling
         effective_safe_mode = (
             safe_mode
             if safe_mode is not None
             else serialization_lib.in_safe_mode()
         )
 
-        if effective_safe_mode is not False:
-            raise ValueError(
-                "Requested the deserialization of a `TFSMLayer`, which "
-                "loads an external SavedModel. This carries a potential risk "
-                "of arbitrary code execution and thus it is disallowed by "
-                "default. If you trust the source of the artifact, you can "
-                "override this error by passing `safe_mode=False` to the "
-                "loading function, or calling "
-                "`keras.config.enable_unsafe_deserialization()."
-            )
-
-        return cls(**config)
+        # Default to safe mode for direct from_config() calls, and propagate
+        # explicit overrides to the constructor's SavedModel load guard.
+        with serialization_lib.SafeModeScope(effective_safe_mode is not False):
+            return cls(**config)

@@ -173,11 +173,38 @@ class LegacyH5WholeModelTest(testing.TestCase):
         with self.assertRaisesRegex(ValueError, "arbitrary code execution"):
             legacy_h5_format.load_model_from_hdf5(temp_filepath)
 
+        # `safe_mode=None` reaches the scope unchanged; only an explicit
+        # `False` may opt out.
+        with self.assertRaisesRegex(ValueError, "arbitrary code execution"):
+            legacy_h5_format.load_model_from_hdf5(temp_filepath, safe_mode=None)
+
         loaded = legacy_h5_format.load_model_from_hdf5(
             temp_filepath, safe_mode=False
         )
         self.assertAllClose(mean, loaded.layers[1].arguments["mu"])
         self.assertAllClose(std, loaded.layers[1].arguments["std"])
+
+    def test_safe_mode_none_opens_safe_scope(self):
+        seen = []
+
+        @object_registration.register_keras_serializable(package="my_package")
+        class ScopeRecorder(layers.Layer):
+            def __init__(self, **kwargs):
+                super().__init__(**kwargs)
+                seen.append(serialization_lib.in_safe_mode())
+
+            def call(self, inputs):
+                return inputs
+
+        model = models.Sequential([layers.Input((3,)), ScopeRecorder()])
+        temp_filepath = os.path.join(self.get_temp_dir(), "recorder.h5")
+        legacy_h5_format.save_model_to_hdf5(model, temp_filepath)
+
+        # A `Sequential` model opens no scope of its own, so the layer sees
+        # the loader's scope. `safe_mode=None` must not act as an opt-out.
+        seen.clear()
+        legacy_h5_format.load_model_from_hdf5(temp_filepath, safe_mode=None)
+        self.assertEqual(seen, [True])
 
     def test_saving_include_optimizer_false(self):
         model = models.Sequential()

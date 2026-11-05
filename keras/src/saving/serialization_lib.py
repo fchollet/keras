@@ -593,7 +593,12 @@ def deserialize_keras_object(
         The object described by the `config` dictionary.
     """
     safe_scope_arg = in_safe_mode()  # Enforces SafeModeScope
-    safe_mode = safe_scope_arg if safe_scope_arg is not None else safe_mode
+    # `None` is the value `in_safe_mode()` returns when no scope is active, so
+    # the `safe_mode` argument must be normalized to a boolean before it opens
+    # a scope of its own: only an explicit `False` opts out.
+    safe_mode = (
+        safe_scope_arg if safe_scope_arg is not None else safe_mode is not False
+    )
 
     module_objects = kwargs.pop("module_objects", None)
     custom_objects = custom_objects or {}

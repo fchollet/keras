@@ -135,10 +135,13 @@ def load_model(filepath, custom_objects=None, compile=True, safe_mode=True):
             (strings) to custom classes or functions to be
             considered during deserialization.
         compile: Boolean, whether to compile the model after loading.
-        safe_mode: Boolean, whether to disallow unsafe `lambda` deserialization.
-            When `safe_mode=False`, loading an object has the potential to
-            trigger arbitrary code execution. This argument is only
-            applicable to the Keras v3 model format. Defaults to `True`.
+        safe_mode: Boolean, whether to disallow unsafe `lambda`
+            deserialization, as well as the loading of an external SavedModel
+            by a `keras.layers.TFSMLayer`. The latter also covers a
+            `TFSMLayer` instantiated by a custom layer, model or metric that
+            is itself being deserialized. When `safe_mode=False`, loading an
+            object has the potential to trigger arbitrary code execution.
+            Defaults to `True`.
 
     Returns:
         A Keras model instance. If the original model was compiled,

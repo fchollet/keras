@@ -223,6 +223,14 @@ class SerializationLibTest(testing.TestCase):
         _, new_obj, _ = self.roundtrip(obj, safe_mode=False)
         self.assertEqual(obj["activation"](3), new_obj["activation"](3))
 
+    def test_lambda_fn_safe_mode_none(self):
+        # `None` is the value that means "no scope", so it must not be taken
+        # as an opt-out when it arrives as the `safe_mode` argument. Only an
+        # explicit `False` disables safe mode.
+        obj = {"activation": lambda x: x**2}
+        with self.assertRaisesRegex(ValueError, "arbitrary code execution"):
+            self.roundtrip(obj, safe_mode=None)
+
     def test_lambda_layer(self):
         lmbda = keras.layers.Lambda(lambda x: x**2)
         with self.assertRaisesRegex(ValueError, "arbitrary code execution"):
