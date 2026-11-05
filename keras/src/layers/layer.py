@@ -1550,24 +1550,33 @@ class Layer(BackendLayer, Operation):
         Without a `QuantizedWeight` view this is the float property `name`
         (which merges any LoRA update itself) with no scale or zero point.
         Otherwise it is the stored codes, scale and zero point, or, with
-        LoRA enabled, the mode's `encode` of the dequantized weight plus
-        the LoRA update `lora_{name}_a @ lora_{name}_b`.
+        LoRA or DoRA enabled, the mode's `encode` of the effective weight.
         """
         quantized_weight = self._quantized_weight()
         if quantized_weight is None:
             return getattr(self, name), None, None
-        if not self.lora_enabled:
+        if not self.lora_enabled and not getattr(self, "dora_enabled", False):
             return (
                 quantized_weight.codes,
                 quantized_weight.scale,
                 quantized_weight.zero_point,
             )
-        lora_delta = (self.lora_alpha / self.lora_rank) * ops.matmul(
-            getattr(self, f"lora_{name}_a"), getattr(self, f"lora_{name}_b")
-        )
-        merged = ops.add(
-            quantized_weight.dequantize(self.variable_dtype), lora_delta
-        )
+        merged = quantized_weight.dequantize(self.variable_dtype)
+        if self.lora_enabled:
+            delta = (self.lora_alpha / self.lora_rank) * ops.matmul(
+                getattr(self, f"lora_{name}_a"),
+                getattr(self, f"lora_{name}_b"),
+            )
+            merged = ops.add(merged, delta)
+        elif self.dora_enabled:
+            delta = (self.dora_alpha / self.dora_rank) * ops.matmul(
+                getattr(self, f"dora_{name}_a"),
+                getattr(self, f"dora_{name}_b"),
+            )
+            combined = ops.add(merged, delta)
+            axes = tuple(range(len(combined.shape) - 1))
+            norm = ops.sqrt(ops.sum(ops.square(combined), axis=axes))
+            merged = self.dora_magnitude * ops.divide_no_nan(combined, norm)
         strategy = strategy_registry.get_strategy(self.quantization_mode)
         return strategy.encode(self, merged, self.quantization_config)
 
@@ -1621,9 +1630,11 @@ class Layer(BackendLayer, Operation):
             store[str(idx)] = value
             idx += 1
 
-    def _load_serialized_variables(self, store, name):
+    def _load_serialized_variables(
+        self, store, name, check_variable_count=True
+    ):
         """Loads the variables `_save_serialized_variables` saved."""
-        if not self.lora_enabled:
+        if not self.lora_enabled and check_variable_count:
             self._check_load_own_variables(store)
         if not self.built:
             return
@@ -1649,6 +1660,10 @@ class Layer(BackendLayer, Operation):
             for factor in ("a", "b"):
                 lora = getattr(self, f"lora_{name}_{factor}")
                 lora.assign(ops.zeros(lora.shape))
+        if getattr(self, "dora_enabled", False):
+            for factor in ("a", "b"):
+                dora = getattr(self, f"dora_{name}_{factor}")
+                dora.assign(ops.zeros(dora.shape))
         strategy = strategy_registry.get_strategy(mode)
         if strategy is not None:
             strategy.variables_loaded(self)

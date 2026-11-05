@@ -373,6 +373,167 @@ class EmbeddingTest(test_case.TestCase):
         with self.assertRaisesRegex(ValueError, "lora is already enabled"):
             layer.enable_lora(rank=2)
 
+    @pytest.mark.requires_trainable_backend
+    def test_enable_dora(self):
+        layer = layers.Embedding(10, 16)
+        layer.build()
+        layer.enable_dora(4)
+        self.assertLen(layer.trainable_weights, 3)
+        self.assertLen(layer.non_trainable_weights, 1)
+        if backend.backend() == "torch":
+            self.assertLen(layer.torch_params, 4)
+        self.assertDType(layer.dora_embeddings_a, "float32")
+        self.assertDType(layer.dora_embeddings_b, "float32")
+        self.assertDType(layer.dora_magnitude, "float32")
+
+        # Try eager call
+        x = np.random.randint(0, 9, size=(64, 3))
+        y = np.random.random((64, 3, 16))
+        _ = layer(x[:2])
+
+        init_dora_a_embeddings_value = layer.dora_embeddings_a.numpy()
+        init_dora_b_embeddings_value = layer.dora_embeddings_b.numpy()
+        init_dora_magnitude_value = layer.dora_magnitude.numpy()
+
+        # Try calling fit()
+        model = models.Sequential([layer])
+        model.compile(optimizer="sgd", loss="mse")
+        model.fit(x, y)
+
+        final_dora_a_embeddings_value = layer.dora_embeddings_a.numpy()
+        final_dora_b_embeddings_value = layer.dora_embeddings_b.numpy()
+        final_dora_magnitude_value = layer.dora_magnitude.numpy()
+
+        diff_a = np.max(
+            np.abs(init_dora_a_embeddings_value - final_dora_a_embeddings_value)
+        )
+        diff_b = np.max(
+            np.abs(init_dora_b_embeddings_value - final_dora_b_embeddings_value)
+        )
+        diff_m = np.max(
+            np.abs(init_dora_magnitude_value - final_dora_magnitude_value)
+        )
+
+        self.assertGreater(diff_a, 0.0)
+        self.assertGreater(diff_b, 0.0)
+        self.assertGreater(diff_m, 0.0)
+
+        # Try saving and reloading the model
+        temp_filepath = os.path.join(self.get_temp_dir(), "dora_model.keras")
+        model.save(temp_filepath)
+
+        new_model = saving.load_model(temp_filepath)
+        self.assertTrue(new_model.layers[0].dora_enabled)
+        self.assertAllClose(model.predict(x), new_model.predict(x))
+
+        # Try saving and reloading the model's weights only
+        temp_filepath = os.path.join(
+            self.get_temp_dir(), "dora_model.weights.h5"
+        )
+        model.save_weights(temp_filepath)
+
+        # Load the file into a fresh, non-dora model
+        new_model = models.Sequential(
+            [
+                layers.Input((3,), dtype="int32"),
+                layers.Embedding(10, 16),
+            ]
+        )
+        new_model.load_weights(temp_filepath)
+        self.assertAllClose(model.predict(x), new_model.predict(x))
+
+        # Try loading a normal checkpoint into a dora model
+        new_model.save_weights(temp_filepath)
+        model.load_weights(temp_filepath)
+        self.assertAllClose(model.predict(x), new_model.predict(x))
+
+    def test_enable_dora_with_alpha(self):
+        layer = layers.Embedding(input_dim=3, output_dim=2)
+        layer.build((None,))
+
+        base_emb = np.array(
+            [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]], dtype=np.float32
+        )
+        layer._embeddings.assign(base_emb)
+
+        layer.enable_dora(2, dora_alpha=3.0)
+        self.assertEqual(layer.dora_rank, 2)
+        self.assertEqual(layer.dora_alpha, 3.0)
+
+        a_val = np.array([[0.1, 0.1], [0.2, 0.2], [0.3, 0.3]], dtype=np.float32)
+        b_val = np.array([[0.5, 0.5], [0.6, 0.6]], dtype=np.float32)
+        layer.dora_embeddings_a.assign(a_val)
+        layer.dora_embeddings_b.assign(b_val)
+
+        # Manually compute expected effective embeddings.
+        expected_delta = 1.5 * np.matmul(a_val, b_val)
+        W_combined = base_emb + expected_delta
+        norm = np.sqrt(np.sum(np.square(W_combined), axis=0))
+        expected_embeddings = ops.convert_to_numpy(layer.dora_magnitude) * (
+            W_combined / norm
+        )
+
+        actual_embeddings = ops.convert_to_numpy(layer.embeddings)
+        self.assertAllClose(
+            actual_embeddings, expected_embeddings, tpu_atol=1e-3, tpu_rtol=1e-3
+        )
+
+    def test_dora_rank_argument(self):
+        self.run_layer_test(
+            layers.Embedding,
+            init_kwargs={"input_dim": 5, "output_dim": 4, "dora_rank": 2},
+            input_shape=(2, 3),
+            input_dtype="int32",
+            expected_output_shape=(2, 3, 4),
+            expected_num_trainable_weights=3,
+            expected_num_non_trainable_weights=1,
+            expected_num_seed_generators=0,
+            expected_num_losses=0,
+            supports_masking=False,
+        )
+
+    def test_dora_lora_mutual_exclusivity(self):
+        layer = layers.Embedding(input_dim=10, output_dim=16)
+        layer.build()
+        layer.enable_lora(rank=2)
+        with self.assertRaisesRegex(
+            ValueError, "LoRA is already enabled. Cannot enable DoRA."
+        ):
+            layer.enable_dora(rank=2)
+
+        layer2 = layers.Embedding(input_dim=10, output_dim=16)
+        layer2.build()
+        layer2.enable_dora(rank=2)
+        with self.assertRaisesRegex(
+            ValueError, "dora is already enabled. Cannot enable LoRA."
+        ):
+            layer2.enable_lora(rank=2)
+
+    def test_enable_dora_with_embeddings_constraint(self):
+        layer = layers.Embedding(
+            input_dim=10, output_dim=16, embeddings_constraint="max_norm"
+        )
+        with self.assertRaisesRegex(
+            ValueError, "DoRA is incompatible with embedding constraints"
+        ):
+            layer.enable_dora(rank=2)
+
+    def test_enable_dora_on_unbuilt_layer(self):
+        layer = layers.Embedding(input_dim=10, output_dim=16)
+        with self.assertRaisesRegex(
+            ValueError, "Cannot enable dora on a layer that isn't yet built."
+        ):
+            layer.enable_dora(rank=2)
+
+    def test_enable_dora_when_already_enabled(self):
+        layer = layers.Embedding(input_dim=10, output_dim=16)
+        layer.build()
+        layer.enable_dora(rank=2)
+        with self.assertRaisesRegex(
+            ValueError, "dora is already enabled. This can only be done once"
+        ):
+            layer.enable_dora(rank=2)
+
     def test_enable_lora_after_int4_quantization_freezes_variable(self):
         # In int4 mode the `embeddings` property returns a freshly unpacked
         # tensor rather than the variable, so freezing must go through
@@ -913,6 +1074,40 @@ class EmbeddingTest(test_case.TestCase):
         # Should run without error
         y = layer(x)
         self.assertEqual(y.shape, (4, 8, output_dim))
+
+    @parameterized.named_parameters(
+        ("grouped_block_64", 64),
+        ("per_channel", None),
+    )
+    @pytest.mark.requires_trainable_backend
+    def test_int4_block_size_with_dora(self, block_size):
+        """Test int4 quantization with DoRA and different block_size."""
+        input_dim, output_dim = 50, 128
+        layer = layers.Embedding(input_dim=input_dim, output_dim=output_dim)
+        layer.build()
+
+        config = Int4QuantizationConfig(block_size=block_size)
+        layer.quantize("int4", config=config)
+        layer.enable_dora(rank=4)
+
+        a_val = np.random.random(layer.dora_embeddings_a.shape).astype(
+            "float32"
+        )
+        b_val = np.random.random(layer.dora_embeddings_b.shape).astype(
+            "float32"
+        )
+        layer.dora_embeddings_a.assign(a_val)
+        layer.dora_embeddings_b.assign(b_val)
+
+        x = np.random.randint(0, input_dim, size=(4, 8))
+
+        y = layer(x)
+        self.assertEqual(y.shape, (4, 8, output_dim))
+
+        layer.dora_enabled = False
+        y_base = layer(x)
+        layer.dora_enabled = True
+        self.assertNotAllClose(y, y_base)
 
     def test_int4_grouped_merged_save_keeps_lora_update(self):
         # See `DenseTest.test_int4_grouped_merged_save_keeps_lora_update`.

@@ -121,13 +121,28 @@ def apply_bias_activation(layer, x):
 
 
 def add_lookup_lora_delta(layer, inputs, outputs):
-    """Adds the LoRA update to gathered embeddings, when LoRA is enabled."""
+    """Adds the LoRA or DoRA update to gathered embeddings."""
     if layer.lora_enabled:
         lora_outputs = ops.take(layer.lora_embeddings_a, inputs, axis=0)
         lora_outputs = ops.matmul(lora_outputs, layer.lora_embeddings_b)
         outputs = ops.add(
             outputs, (layer.lora_alpha / layer.lora_rank) * lora_outputs
         )
+        outputs = ops.cast(outputs, dtype=layer.compute_dtype)
+    elif getattr(layer, "dora_enabled", False):
+        quantized_weight = layer._quantized_weight()
+        embeddings = (
+            layer._embeddings
+            if quantized_weight is None
+            else quantized_weight.dequantize(layer.compute_dtype)
+        )
+        delta = (layer.dora_alpha / layer.dora_rank) * ops.matmul(
+            layer.dora_embeddings_a, layer.dora_embeddings_b
+        )
+        combined = ops.add(embeddings, delta)
+        norm = ops.sqrt(ops.sum(ops.square(combined), axis=0))
+        embeddings = layer.dora_magnitude * ops.divide_no_nan(combined, norm)
+        outputs = ops.take(embeddings, inputs, axis=0)
         outputs = ops.cast(outputs, dtype=layer.compute_dtype)
     return outputs
 
