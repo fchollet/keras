@@ -972,7 +972,12 @@ def categorical_crossentropy(target, output, from_logits=False, axis=-1):
     if from_logits:
         log_prob = tnn.log_softmax(output, dim=axis)
     else:
-        output = output / torch.sum(output, dim=axis, keepdim=True)
+        epsilon_ = torch.tensor(
+            backend.epsilon(), dtype=output.dtype, device=output.device
+        )
+        output = output / torch.maximum(
+            torch.sum(output, dim=axis, keepdim=True), epsilon_
+        )
         output = torch.clip(output, backend.epsilon(), 1.0 - backend.epsilon())
         log_prob = torch.log(output)
     return -torch.sum(target * log_prob, dim=axis)
@@ -1017,7 +1022,12 @@ def sparse_categorical_crossentropy(target, output, from_logits=False, axis=-1):
     if from_logits:
         result = tnn.cross_entropy(output, target, reduction="none")
     else:
-        output = output / torch.sum(output, dim=1, keepdim=True)
+        epsilon_ = torch.tensor(
+            backend.epsilon(), dtype=output.dtype, device=output.device
+        )
+        output = output / torch.maximum(
+            torch.sum(output, dim=1, keepdim=True), epsilon_
+        )
         output = torch.clip(output, backend.epsilon(), 1.0 - backend.epsilon())
         log_prob = torch.log(output)
         result = tnn.nll_loss(log_prob, target, reduction="none")

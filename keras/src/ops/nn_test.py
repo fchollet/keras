@@ -2693,6 +2693,28 @@ class NNOpsCorrectnessTest(testing.TestCase):
         )
         self.assertAllClose(result, np.array([1.16825923, 2.55436813]))
 
+    def test_categorical_crossentropy_zero_sum_row(self):
+        # A row that sums to zero must not divide by zero and yield `NaN`; the
+        # loss should stay finite over the valid rows (#23551).
+        target = np.array(
+            [[1.0, 0.0], [0.0, 1.0], [0.0, 1.0]], dtype="float32"
+        )
+        output = np.array(
+            [[0.0, 0.0], [0.5, 0.5], [0.7, 0.3]], dtype="float32"
+        )
+        result = knn.categorical_crossentropy(target, output, from_logits=False)
+        result = ops.convert_to_numpy(result)
+        self.assertTrue(np.all(np.isfinite(result)))
+
+    def test_sparse_categorical_crossentropy_zero_sum_row(self):
+        target = np.array([1, 1], dtype="int32")
+        output = np.array([[0.0, 0.0], [0.7, 0.3]], dtype="float32")
+        result = knn.sparse_categorical_crossentropy(
+            target, output, from_logits=False
+        )
+        result = ops.convert_to_numpy(result)
+        self.assertTrue(np.all(np.isfinite(result)))
+
     def test_sparse_categorical_crossentropy(self):
         target = np.array([0, 1, 2])
         output = np.array(
