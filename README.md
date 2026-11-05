@@ -101,6 +101,7 @@ In Colab, you can do:
 
 ```python
 import os
+
 os.environ["KERAS_BACKEND"] = "jax"
 
 import keras
