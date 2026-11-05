@@ -978,6 +978,21 @@ def categorical_crossentropy(target, output, from_logits=False, axis=-1):
     return -torch.sum(target * log_prob, dim=axis)
 
 
+def _mask_invalid_class_indices(target, num_classes):
+    """Masks out-of-range class indices so they don't read out of bounds.
+
+    PyTorch's `cross_entropy` / `nll_loss` only bounds-check class indices on
+    CPU; on other devices (MPS, CUDA) out-of-range indices are read out of
+    bounds and silently yield garbage. Returns the masked target together with
+    the boolean mask of invalid entries. `-100` is preserved as PyTorch's
+    default `ignore_index`.
+    """
+    invalid = ~(
+        (target == -100) | ((target >= 0) & (target < num_classes))
+    )
+    return target.masked_fill(invalid, 0), invalid
+
+
 def sparse_categorical_crossentropy(target, output, from_logits=False, axis=-1):
     target = convert_to_tensor(target, dtype=torch.long)
     output = convert_to_tensor(output)
@@ -1014,6 +1029,16 @@ def sparse_categorical_crossentropy(target, output, from_logits=False, axis=-1):
         if class_axis != 1:
             output = output.movedim(class_axis, 1)
 
+    # PyTorch only bounds-checks class indices on CPU. On other devices,
+    # out-of-range indices read out of bounds and produce garbage; mask them
+    # and return `NaN` for those entries (#23664).
+    if target.device.type != "cpu":
+        target, invalid = _mask_invalid_class_indices(
+            target, output.shape[1]
+        )
+    else:
+        invalid = None
+
     if from_logits:
         result = tnn.cross_entropy(output, target, reduction="none")
     else:
@@ -1021,6 +1046,9 @@ def sparse_categorical_crossentropy(target, output, from_logits=False, axis=-1):
         output = torch.clip(output, backend.epsilon(), 1.0 - backend.epsilon())
         log_prob = torch.log(output)
         result = tnn.nll_loss(log_prob, target, reduction="none")
+
+    if invalid is not None:
+        result = result.masked_fill(invalid, float("nan"))
 
     if squeeze:
         result = result.squeeze(0)

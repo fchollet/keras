@@ -82,3 +82,34 @@ class PoolingChannelsLastContiguityTest(testing.TestCase):
         x = torch.randn((2, 6, 6, 6, 4))
         out = ops.max_pool(x, (2, 2, 2), data_format="channels_last")
         self.assertTrue(out.is_contiguous())
+
+
+@pytest.mark.skipif(
+    backend.backend() != "torch",
+    reason="This test is only applicable to the PyTorch backend.",
+)
+class TorchSparseCrossEntropyTest(testing.TestCase):
+    def test_sparse_categorical_crossentropy_ignore_index(self):
+        # `-100` must keep working as PyTorch's default `ignore_index`.
+        y_true = ops.convert_to_tensor(np.array([0, -100, 2], "int64"))
+        y_pred = ops.convert_to_tensor(
+            np.array(
+                [[0.2, 0.5, 0.3], [0.1, 0.1, 0.8], [0.6, 0.3, 0.1]],
+                "float32",
+            )
+        )
+        loss = ops.sparse_categorical_crossentropy(y_true, y_pred)
+        loss = ops.convert_to_numpy(loss)
+        self.assertAllClose(loss[1], 0.0)
+        self.assertFalse(np.isnan(loss).any())
+
+    def test_mask_invalid_class_indices(self):
+        from keras.src.backend.torch.ops import nn as torch_nn
+
+        target = torch.tensor([0, 5, -1, -100, 2], dtype=torch.long)
+        masked, invalid = torch_nn._mask_invalid_class_indices(target, 3)
+        # Out-of-range indices are replaced by 0, `-100` is preserved.
+        self.assertEqual(masked.tolist(), [0, 0, 0, -100, 2])
+        self.assertEqual(
+            invalid.tolist(), [False, True, True, False, False]
+        )
