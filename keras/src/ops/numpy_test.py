@@ -5670,6 +5670,12 @@ class NumpyOneInputOpsCorrectnessTest(testing.TestCase):
             np.all(x, axis=1, keepdims=True),
         )
 
+        # Int8 and uint8 inputs reduce like bool.
+        for dtype in ("int8", "uint8"):
+            x = np.array([[1, 2, 127], [3, 0, 5]], dtype=dtype)
+            self.assertAllClose(knp.all(x), np.all(x))
+            self.assertAllClose(knp.all(x, axis=1), np.all(x, axis=1))
+
     def test_any(self):
         x = np.array([[True, False, True], [True, True, True]])
         self.assertAllClose(knp.any(x), np.any(x))
@@ -6133,6 +6139,23 @@ class NumpyOneInputOpsCorrectnessTest(testing.TestCase):
         out = knp.kaiser(x_tensor, beta)
         self.assertEqual(out.shape[0], x)
         self.assertAllClose(out, expected)
+
+    @pytest.mark.skipif(
+        testing.tensorflow_uses_gpu(),
+        reason="bincount not supported on TensorFlow GPU",
+    )
+    def test_bincount_large_weights_and_empty_input(self):
+        # Sums past 2**24 stay exact for int weights.
+        x = np.array([0, 0], dtype="int32")
+        weights = np.array([2**24, 1], dtype="int32")
+        self.assertAllEqual(
+            knp.bincount(x, weights=weights), np.bincount(x, weights=weights)
+        )
+
+        x = np.array([], dtype="int32")
+        self.assertAllClose(
+            knp.bincount(x, minlength=3), np.bincount(x, minlength=3)
+        )
 
     @parameterized.named_parameters(
         named_product(sparse_input=(False, True), sparse_arg=(False, True))
@@ -7445,6 +7468,10 @@ class NumpyOneInputOpsCorrectnessTest(testing.TestCase):
         x = np.array([[0.0, -0.0, -1.1e-45], [1.1e-38, 2, -1]])
         self.assertAllClose(knp.signbit(x), np.signbit(x))
         self.assertAllClose(knp.Signbit()(x), np.signbit(x))
+
+        # A negative nan has its sign bit set.
+        x = np.array([np.nan, np.copysign(np.nan, -1), -0.0], dtype="float32")
+        self.assertAllClose(knp.signbit(x), np.signbit(x))
 
     def test_sin(self):
         x = np.array([[1, -2, 3], [-3, 2, -1]])
@@ -13857,6 +13884,12 @@ class HistogramTest(testing.TestCase):
         self.assertAllClose(counts, expected_counts)
         self.assertEqual(edges.shape, expected_edges.shape)
         self.assertAllClose(edges, expected_edges)
+
+        # Values past the last edge and nan are not counted.
+        input_tensor = np.array([1.0, 10.0, 11.0, 100.0, np.nan])
+        expected_counts, _ = np.histogram(input_tensor, bins=5, range=(0, 10))
+        counts, _ = hist_op(input_tensor, bins=5, range=(0, 10))
+        self.assertAllClose(counts, expected_counts)
 
     def test_histogram_symbolic_input(self):
         hist_op = knp.histogram
