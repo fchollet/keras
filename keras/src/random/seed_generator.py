@@ -1,5 +1,3 @@
-import random as python_random
-
 import numpy as np
 
 from keras.src import backend
@@ -143,7 +141,12 @@ def global_seed_generator():
 
 
 def make_default_seed():
-    return python_random.randint(1, int(1e9))
+    """Return the default integer seed used by random initializers."""
+    from keras.src.utils import rng_utils
+
+    # Keep implicit initializer seeds deterministic after
+    # `keras.utils.set_random_seed()` calls.
+    return rng_utils.consume_default_initializer_seed()
 
 
 def draw_seed(seed):

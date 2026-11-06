@@ -2,6 +2,7 @@ import numpy as np
 
 import keras
 from keras.src import backend
+from keras.src.backend.common import global_state
 from keras.src.testing import test_case
 from keras.src.utils import rng_utils
 
@@ -53,3 +54,18 @@ class TestRandomSeedSetting(test_case.TestCase):
         rng_utils.set_random_seed(1337)
         y4 = backend.random.randint((32, 10), minval=0, maxval=1000)
         self.assertNotAllClose(y1, y4)
+
+    def test_consume_default_initializer_seed_does_not_advance_numpy_rng(self):
+        global_state.set_global_attribute(rng_utils.GLOBAL_RANDOM_SEED, None)
+        global_state.set_global_attribute(
+            rng_utils.GLOBAL_DEFAULT_INITIALIZER_SEED, None
+        )
+
+        np.random.seed(1337)
+        expected_next = int(np.random.randint(1, 2**31))
+
+        np.random.seed(1337)
+        rng_utils.consume_default_initializer_seed()
+        actual_next = int(np.random.randint(1, 2**31))
+
+        self.assertEqual(actual_next, expected_next)
