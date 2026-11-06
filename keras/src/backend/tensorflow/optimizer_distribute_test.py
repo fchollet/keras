@@ -8,6 +8,7 @@ from tensorflow.python.eager import context
 
 from keras.src import backend
 from keras.src import testing
+from keras.src.optimizers.loss_scale_optimizer import LossScaleOptimizer
 from keras.src.optimizers.sgd import SGD
 
 
@@ -67,6 +68,95 @@ class OptimizerDistributeTest(testing.TestCase):
             self.assertAllClose(
                 vars, [0.0, -4.0, -4.0, 2.0], rtol=1e-4, atol=1e-4
             )
+
+    @parameterized.product(
+        nonfinite_gradient=(np.inf, np.nan),
+        overflow_replica=(0, 1),
+        run_eagerly=(True, False),
+    )
+    def test_loss_scale_optimizer_nonfinite_gradients(
+        self, nonfinite_gradient, overflow_replica, run_eagerly
+    ):
+        with self.strategy.scope():
+            variable = backend.Variable(10.0)
+            optimizer = LossScaleOptimizer(
+                SGD(learning_rate=1.0),
+                initial_scale=2.0,
+                dynamic_growth_steps=2,
+            )
+            optimizer.build([variable])
+
+        def update(grads):
+            self.strategy.run(
+                lambda grad: optimizer.apply([grad], [variable]), args=(grads,)
+            )
+
+        if not run_eagerly:
+            update = tf.function(update)
+
+        update(tf.constant(2.0))
+        self.assertAllClose(variable, 8.0)
+        self.assertAllClose(optimizer.step_counter, 1)
+
+        grads = self.strategy.experimental_distribute_values_from_function(
+            lambda ctx: tf.constant(
+                nonfinite_gradient
+                if ctx.replica_id_in_sync_group == overflow_replica
+                else 2.0
+            )
+        )
+        update(grads)
+
+        for state, expected in (
+            (variable, 8.0),
+            (optimizer.iterations, 1),
+            (optimizer.dynamic_scale, 1.0),
+            (optimizer.step_counter, 0),
+        ):
+            self.assertAllClose(
+                self.strategy.experimental_local_results(state.value),
+                [expected, expected],
+                msg=state.name,
+            )
+
+    @parameterized.parameters(True, False)
+    def test_loss_scale_optimizer_finite_gradients(self, run_eagerly):
+        with self.strategy.scope():
+            variable = backend.Variable(10.0)
+            optimizer = LossScaleOptimizer(
+                SGD(learning_rate=1.0),
+                initial_scale=2.0,
+                dynamic_growth_steps=2,
+            )
+            optimizer.build([variable])
+
+        def replica_update():
+            replica_context = tf.distribute.get_replica_context()
+            replica_id = replica_context.replica_id_in_sync_group
+            grad = optimizer.scale_loss(tf.cast(replica_id + 1, tf.float32))
+            optimizer.apply([grad], [variable])
+
+        def update():
+            self.strategy.run(replica_update)
+
+        if not run_eagerly:
+            update = tf.function(update)
+
+        for step, (weight, scale, counter) in enumerate(
+            ((7.0, 2.0, 1), (4.0, 4.0, 0), (1.0, 4.0, 1)), start=1
+        ):
+            update()
+            for state, expected in (
+                (variable, weight),
+                (optimizer.iterations, step),
+                (optimizer.dynamic_scale, scale),
+                (optimizer.step_counter, counter),
+            ):
+                self.assertAllClose(
+                    self.strategy.experimental_local_results(state.value),
+                    [expected, expected],
+                    msg=state.name,
+                )
 
     def test_weight_decay(self):
         with self.strategy.scope():

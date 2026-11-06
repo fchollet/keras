@@ -276,15 +276,18 @@ class LossScaleOptimizer(optimizer.Optimizer):
             def _handle_cross_replica(distribution, grads, trainable_variables):
                 finite_per_replica = (
                     distribution.extended.call_for_each_replica(
-                        self.check_finite, args=(grads,)
+                        lambda grads: tf.cast(
+                            self.check_finite(grads), tf.int32
+                        ),
+                        args=(grads,),
                     )
                 )
-                # Each replica computed the same `finite` value, since
-                # `grads` is all-reduced across replicas. Arbitrarily take
-                # `finite` from the first replica.
-                finite = distribution.experimental_local_results(
-                    finite_per_replica
-                )[0]
+                # Gradients are still local to each replica, so all replicas
+                # must have finite gradients before any update is applied.
+                finite = distribution.reduce(
+                    tf.distribute.ReduceOp.SUM, finite_per_replica, axis=None
+                )
+                finite = tf.equal(finite, distribution.num_replicas_in_sync)
 
                 def apply_fn():
                     distribution.extended.call_for_each_replica(
