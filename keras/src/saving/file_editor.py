@@ -7,6 +7,7 @@ import zipfile
 
 import numpy as np
 import rich.console
+import rich.markup
 
 from keras.src import backend
 from keras.src.api_export import keras_export
@@ -158,23 +159,26 @@ class KerasFileEditor:
                 inner_path = f"{base_inner_path}/{ref_key}"
                 if inner_path in checked_paths:
                     continue
+                # Keys may come from the opened file: never parse as markup.
+                path_label = rich.markup.escape(inner_path)
 
                 if ref_key not in target:
                     error_count += 1
                     checked_paths.add(inner_path)
                     if isinstance(ref_val, dict):
+                        keys = rich.markup.escape(str(list(ref_val.keys())))
                         self.console.print(
-                            f"[color(160)]...Object [bold]{inner_path}[/] "
+                            f"[color(160)]...Object [bold]{path_label}[/] "
                             f"present in {ref_name}, "
                             f"missing from {target_name}[/]"
                         )
                         self.console.print(
-                            f"    In {ref_name}, {inner_path} contains "
-                            f"the following keys: {list(ref_val.keys())}"
+                            f"    In {ref_name}, {path_label} contains "
+                            f"the following keys: {keys}"
                         )
                     else:
                         self.console.print(
-                            f"[color(160)]...Weight [bold]{inner_path}[/] "
+                            f"[color(160)]...Weight [bold]{path_label}[/] "
                             f"present in {ref_name}, "
                             f"missing from {target_name}[/]"
                         )
@@ -197,7 +201,7 @@ class KerasFileEditor:
                         checked_paths.add(inner_path)
                         self.console.print(
                             f"[color(160)]...Weight shape mismatch "
-                            f"for [bold]{inner_path}[/][/]\n"
+                            f"for [bold]{path_label}[/][/]\n"
                             f"    In {ref_name}: "
                             f"shape={ref_val.shape}\n"
                             f"    In {target_name}: "
@@ -607,6 +611,8 @@ class KerasFileEditor:
         version = self.metadata["keras_version"]
         date = self.metadata["date_saved"]
         if rich_style:
+            version = rich.markup.escape(str(version))
+            date = rich.markup.escape(str(date))
             version = f"{summary_utils.highlight_symbol(version)}"
             date = f"{summary_utils.highlight_symbol(date)}"
         return f"Saved with Keras {version} - date: {date}"
@@ -616,6 +622,8 @@ class KerasFileEditor:
     ):
         for idx, (key, value) in enumerate(weights_dict.items()):
             inner_path = os.path.join(inner_path, key)
+            # Names come from the opened file: never parse them as markup.
+            key_label = rich.markup.escape(key)
             is_last = idx == len(weights_dict) - 1
             if is_first:
                 is_first = False
@@ -626,12 +634,12 @@ class KerasFileEditor:
                 connector = "├─ "
 
             if isinstance(value, dict):
-                bold_key = summary_utils.bold_text(key)
+                bold_key = summary_utils.bold_text(key_label)
                 object_label = f"{prefix}{connector}{bold_key}"
                 if inner_path in self.object_metadata:
                     metadata = self.object_metadata[inner_path]
                     if "name" in metadata:
-                        name = metadata["name"]
+                        name = rich.markup.escape(str(metadata["name"]))
                         object_label += f" ('{name}')"
                 self.console.print(object_label)
                 if is_last:
@@ -648,13 +656,16 @@ class KerasFileEditor:
                 )
             else:
                 if hasattr(value, "shape"):
-                    bold_key = summary_utils.bold_text(key)
+                    bold_key = summary_utils.bold_text(key_label)
                     self.console.print(
                         f"{prefix}{connector}{bold_key}:"
                         + f" shape={value.shape}, dtype={value.dtype}"
                     )
                 else:
-                    self.console.print(f"{prefix}{connector}{key}: {value}")
+                    value = rich.markup.escape(str(value))
+                    self.console.print(
+                        f"{prefix}{connector}{key_label}: {value}"
+                    )
 
     def _weights_summary_cli(self):
         self.console.print("Weights structure")

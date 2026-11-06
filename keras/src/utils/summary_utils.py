@@ -256,13 +256,12 @@ def print_summary(
             for kt in node.input_tensors:
                 keras_history = kt._keras_history
                 inbound_layer = keras_history.operation
+                inbound_name = rich.markup.escape(inbound_layer.name)
                 node_index = highlight_number(keras_history.node_index)
                 tensor_index = highlight_number(keras_history.tensor_index)
                 if connections:
                     connections += ", "
-                connections += (
-                    f"{inbound_layer.name}[{node_index}][{tensor_index}]"
-                )
+                connections += f"{inbound_name}[{node_index}][{tensor_index}]"
         if not connections:
             connections = "-"
         return connections

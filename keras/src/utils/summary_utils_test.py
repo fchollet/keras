@@ -159,3 +159,21 @@ class SummaryUtilsTest(testing.TestCase):
         summary_utils.print_summary(model, print_fn=print_to_variable)
         summary_content = "\n".join(summary_content)
         self.assertIn("(1, 10)", summary_content)  # dict_head
+
+    def test_print_model_summary_escapes_connected_layer_names(self):
+        # Layer names can come from a loaded file; the "Connected to" column
+        # must print them literally rather than parse them as Rich markup.
+        inputs = layers.Input((2,), name="inputs")
+        x = layers.Dense(3, name="[red]dense")(inputs)
+        y = layers.Dense(3, name="other")(inputs)
+        outputs = layers.Add()([x, y])
+        model = models.Model(inputs, outputs)
+
+        summary_content = []
+
+        def print_to_variable(text, line_break=False):
+            summary_content.append(text)
+
+        summary_utils.print_summary(model, print_fn=print_to_variable)
+        summary_content = "\n".join(summary_content)
+        self.assertIn("[red]dense[0][0]", summary_content)
