@@ -39,10 +39,29 @@ def pearson_correlation(y_true, y_pred, axis=-1):
     y_true_norm = y_true - ops.mean(y_true, axis=axis, keepdims=True)
     y_pred_norm = y_pred - ops.mean(y_pred, axis=axis, keepdims=True)
 
-    y_true_norm = y_true_norm / ops.std(y_true_norm, axis=axis, keepdims=True)
-    y_pred_norm = y_pred_norm / ops.std(y_pred_norm, axis=axis, keepdims=True)
+    y_true_std = ops.std(y_true_norm, axis=axis, keepdims=True)
+    y_pred_std = ops.std(y_pred_norm, axis=axis, keepdims=True)
 
-    return ops.mean(y_true_norm * y_pred_norm, axis=axis)
+    # Force-finite: Pearson correlation is undefined when either
+    # side has zero variance along `axis`; rather than propagate that as
+    # NaN (which poisons any Mean-based aggregation it later feeds into),
+    # explicitly branch on the exact zero-variance condition -- matching
+    # sklearn.feature_selection.r_regression's `force_finite=True` default
+    # (which sets a NaN correlation, e.g. from a constant feature, to 0.0)
+    # and this file's own `concordance_correlation`, and the same
+    # explicit-branch style (not a blanket epsilon) used to fix R2Score's
+    # analogous zero-variance case (#23420).
+    is_degenerate = ops.logical_or(
+        ops.equal(y_true_std, 0.0), ops.equal(y_pred_std, 0.0)
+    )
+    safe_y_true_std = ops.where(ops.equal(y_true_std, 0.0), 1.0, y_true_std)
+    safe_y_pred_std = ops.where(ops.equal(y_pred_std, 0.0), 1.0, y_pred_std)
+
+    y_true_norm = y_true_norm / safe_y_true_std
+    y_pred_norm = y_pred_norm / safe_y_pred_std
+
+    result = ops.mean(y_true_norm * y_pred_norm, axis=axis)
+    return ops.where(ops.squeeze(is_degenerate, axis=axis), 0.0, result)
 
 
 @keras_export("keras.metrics.concordance_correlation")
