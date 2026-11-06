@@ -11,6 +11,99 @@ from keras.src.utils import file_utils
 BASE_WEIGHT_PATH = (
     "https://storage.googleapis.com/tensorflow/keras-applications/mobilenet_v2/"
 )
+# SHA-256 of each ImageNet checkpoint, keyed by "<alpha>_<rows>", as
+# `(weights, weights_no_top)`. `alpha` 1.3 and 1.4 are only published for
+# 224x224 inputs.
+WEIGHTS_HASHES = {
+    "0.35_96": (
+        "a94030b8c5e6811c60b93c8b6888d2f309dc112008bd14f0963e8c5473201c2c",
+        "0fafa66a891086408fdeb082ae06e6600daf3266cc642e4f5154d5ba3babe3d1",
+    ),
+    "0.35_128": (
+        "bbbd0d5a7659b4a33292cfe3abd2f4da55a5375dda73f64a80f3139a51f35646",
+        "f555b66d2d4b2d89360b92aee6f36a17278a13596cdf9917620240507c20deef",
+    ),
+    "0.35_160": (
+        "5455e0650cc2110ec04c4289cabc86c0dab62f451c415fd11b08f8567181e45e",
+        "d579c5d3e0e5f4b71db0cda1a156bbd74fe8317e62ea577594b78faf39847639",
+    ),
+    "0.35_192": (
+        "28679d72d96152799221758d59bd956aec61ae0c0007cc67acce599f8ccf8c5d",
+        "2f6951ba27688a8eb9a1d88a351c83b442af427d7c29561b0a76e785ad274bff",
+    ),
+    "0.35_224": (
+        "9993f62719e92e648a521f31f1002f67d1da33c4e980eb9a5ec9c1b9bf668116",
+        "df1c3db1d0d9193719c4c70f707c56f7021f999f825bdc57454c275cf6def19f",
+    ),
+    "0.5_96": (
+        "f8c0ce6592c1736873db9d8f1a7ffba9fb87d78c04f9e93e2988236cf6f2c447",
+        "9caa6295420b1e6e918589e98a959def1e1b6975e8a429b5b67179a06c4f5d30",
+    ),
+    "0.5_128": (
+        "9aa5268ad7c796d91d92295c6ed94b17b7160beffdb42c82c9c1ab0cb1993cbe",
+        "5c9415fd2486b2d10cd66a8406449fe72163597c085fba245d6e3107be0a564b",
+    ),
+    "0.5_160": (
+        "1a051167d3cd6377c55044f6277997711355759ff46ad9d8bf2d2ef646542cc8",
+        "070ad37fe8ad66e6b4ed991dd59bc3931094782a4a1e43ab0fa234194b928aa9",
+    ),
+    "0.5_192": (
+        "13c641bb3146cbe5ce511604ae444fd5e6880a4efd4a238e297a2dc8392812ec",
+        "d6c27788cab07d13d58dd5f187b7a4619372828a159917ba0161f6673d39a246",
+    ),
+    "0.5_224": (
+        "3689f7537ba69e23e3709e7cb0b39a9b9e0fe23383a36b9d2f47add401b51e89",
+        "279052de2cfa801003aa6cc25cc4d007d35dd0b76f06935268c79788b7642d05",
+    ),
+    "0.75_96": (
+        "5de12d7448b9be4efa946c1e78377381cad56aa4c62b9db1c3fc9ce1aad5a829",
+        "1364d4116bbae9b5e16b71476573a86f8c949e1afeaa1e57f26dcf8496e21baa",
+    ),
+    "0.75_128": (
+        "98ff8a2c7f7f01dfcac2fe94d39a427ce3bfde8546fd4a27c06e384d32329fca",
+        "14d8dbb59f86224b7ba12b8f6197e3b8f2a9e45f118e9edfee28da0e64c26584",
+    ),
+    "0.75_160": (
+        "48592977883460eedf171436a37c5d4b6eb9f99d96194a50d176489044968d7a",
+        "771e668e8eeb23ca92c67c73e188a10af4e9a34ffd2c6b79b4ecb12e4044587e",
+    ),
+    "0.75_192": (
+        "41f307a8fe8371f7bb252677a3f863f74d0be49ca3259c23014db43c06eecb99",
+        "8e912ebb2bec4f4df6e9457e97064c85dc59ca081092c07b13e91da8e5951873",
+    ),
+    "0.75_224": (
+        "49288c1612d74121bcf213b2b6c2d81b232a95af2ea36b1d6eecc8c27a8a5dda",
+        "cb4c01ac3f3302f103598af18f1556576df49480279aaea68e258309389411dc",
+    ),
+    "1.0_96": (
+        "268e4342a9fdb6b516dc0180c33767e96aeaa35ec28ebc2a6c44db599b1d24e9",
+        "8b474d1d1d281884fdbae8a4ff671a6c8edbbb62605cfbf6c7e827424bf91739",
+    ),
+    "1.0_128": (
+        "f0bf529aa737c235f739fecaebbe8a6a4bb9dea7dd6469c6b135a63c918a2484",
+        "31150c34687a0e3f78a2bd0a8009ac321b966d10f3b184be4ff34c752f9dbe7f",
+    ),
+    "1.0_160": (
+        "f09ce0035deefa80188c2e9d7b1d9ece58417e6317c5e0223c31e6cdf0b21e72",
+        "1e9310d901d6e4346c8b4d89ad04267c3299ccf252dbe2641dd2b0eb048bf04e",
+    ),
+    "1.0_192": (
+        "95a12003fb7c1ca7163ba4a22dec385e8d30ce1239a34d43cd7cc427fd448dc6",
+        "f5d853e1b4674f7d5c54ce56f7db625029521e84c95e2c9d6ef51d9915ed267a",
+    ),
+    "1.0_224": (
+        "3e195a2857356cfc092cbbb460beb2a5bce279015d7792598b8d3d9e451902e3",
+        "f8aff69536bd77a692c594f559c798c19bf7f3f36668fc9fa00b21c6aab4797c",
+    ),
+    "1.3_224": (
+        "99b88ba81a8af08cf8ef2b1af9b505e0b1ba2bb2ebfba42e852df914ee7c1995",
+        "75347e4e381efdf6552f639f744429b061dceb5bce7f595a1653256231b6668a",
+    ),
+    "1.4_224": (
+        "a7fc66e2d469d2667a5a9059fdef377c830a2fe5aca47e33d9837b7f628e2109",
+        "4160f1612437b83531b0e6464d64a98d6cff0f8eda68c01c7ce6e74be12c034b",
+    ),
+}
 
 
 @keras_export(
@@ -370,24 +463,32 @@ def MobileNetV2(
 
     # Load weights.
     if weights == "imagenet":
+        weights_hashes = WEIGHTS_HASHES.get(f"{float(alpha)}_{rows}")
+        if weights_hashes is None:
+            raise ValueError(
+                "No imagenet weights are published for "
+                f"alpha={alpha} with {rows}x{rows} inputs. "
+                f"Available combinations: {sorted(WEIGHTS_HASHES)}"
+            )
         if include_top:
             model_name = (
                 "mobilenet_v2_weights_tf_dim_ordering_tf_kernels"
                 f"_{float(alpha)}_{rows}.h5"
             )
-            weight_path = BASE_WEIGHT_PATH + model_name
-            weights_path = file_utils.get_file(
-                model_name, weight_path, cache_subdir="models"
-            )
+            file_hash = weights_hashes[0]
         else:
             model_name = (
                 "mobilenet_v2_weights_tf_dim_ordering_tf_kernels_"
                 f"{float(alpha)}_{rows}_no_top.h5"
             )
-            weight_path = BASE_WEIGHT_PATH + model_name
-            weights_path = file_utils.get_file(
-                model_name, weight_path, cache_subdir="models"
-            )
+            file_hash = weights_hashes[1]
+        weight_path = BASE_WEIGHT_PATH + model_name
+        weights_path = file_utils.get_file(
+            model_name,
+            weight_path,
+            cache_subdir="models",
+            file_hash=file_hash,
+        )
         model.load_weights(weights_path)
     elif weights is not None:
         model.load_weights(weights)

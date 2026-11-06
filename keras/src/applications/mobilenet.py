@@ -11,6 +11,74 @@ from keras.src.utils import file_utils
 BASE_WEIGHT_PATH = (
     "https://storage.googleapis.com/tensorflow/keras-applications/mobilenet/"
 )
+# SHA-256 of each ImageNet checkpoint, keyed by "<alpha_text>_<rows>", as
+# `(weights, weights_no_top)`.
+WEIGHTS_HASHES = {
+    "1_0_128": (
+        "ef1480dcb7f11a75bc5187a74863b3b97c4cfed6b6dd5c78f003ba002a4d7fe6",
+        "8fbb8332b956430de61ad4fa1ab261ab5b7922ef1d0f38c30056a485ec0d4ecb",
+    ),
+    "1_0_160": (
+        "a41aa0195ebe0a5301ab90af589155b42671f78704fd9a2e7dda919c478cd479",
+        "22d25b67a8936869b5f0d0c840ba150c90dc89c0b07f8aacd387614be67845d2",
+    ),
+    "1_0_192": (
+        "bd7e7f6a7cd6690a10aedba3e93bec811240418bd9179546e50c0f4c35899a01",
+        "d67556231564ded95aaa7a44004c73aa9696fba267a6817f430eee097af11782",
+    ),
+    "1_0_224": (
+        "006a2d9484fbea625dd4e6518652c101a3eca052671671c56265fc84f2e1181f",
+        "9f9cfd8c925431c06ce96744e1d201575f6a681bf38ae2de38e2ae8f7d7829d3",
+    ),
+    "7_5_128": (
+        "cafcb7455c36187c93eb7fb3a68e29f76b5761cb2d946d57d1967578e3b05361",
+        "dcc5aaa418bbf397a431e79a52be0ad1a61fb6364a9bb6d68b5258f13669c8ba",
+    ),
+    "7_5_160": (
+        "3ee6f1daa0f9da149bec3311eacfb4451ca236bc126dc25ee191f5bdc6e641be",
+        "6056d87ad4e3b341cc8272d68b54a8a113ef0b0e5ab1399e4a801d2942a064fa",
+    ),
+    "7_5_192": (
+        "a7a2364ee404c19301edb827de693f46eeb46aad13e2c5e73494545e57749eef",
+        "b8ea4352b99a87552c0b84c59b59d146b823b684766026ed8f0c68d3aab9e677",
+    ),
+    "7_5_224": (
+        "811e0307a7e8895a180b81c191033482d99470a0604ea8e88e8d947005067d84",
+        "1da9019b66f05a0256dedfed0f321fcaf8bfa71f9facf3f9117e62820be39aa5",
+    ),
+    "5_0_128": (
+        "26752cdb9ab8459c85fb4cd0f45475bbd3bd25f9225b87bbedd474f5976da145",
+        "7f9871530e19990a9a180626566fcc32fb487c70880306592cae219d67179635",
+    ),
+    "5_0_160": (
+        "71c742137645f19426ea3540bb2933310b0a5f2d3a2d09ee1aea91e348f6fba7",
+        "7b15a4d22079138dd889a78cdea8d921a3b73cf7d313ff12f23634c4f71bcace",
+    ),
+    "5_0_192": (
+        "fabfe055bd26ea40c1c0798c4e22fe1eb437feab111be9f1f722360dff81e040",
+        "b848a83f140e284973d80805dc4c184a0a885dadcc1700630a86879c9103d5b1",
+    ),
+    "5_0_224": (
+        "b4b134ed41de14fd8d6717ab4e88b53e3113194acae392bc41c012ba463906bb",
+        "df860c59562f4c4af7a2fb2ae90731caef39fd5d03e5fcd6ca46988965f0a4b7",
+    ),
+    "2_5_128": (
+        "fe295db7f78635f1403127e3ba8cdc6237f83262bdb745063a67c1d81190c7f8",
+        "7d8b7f3c9555cb4579f9659ee233a540e66fd7ad514c0a8b14493b667447c5d6",
+    ),
+    "2_5_160": (
+        "74b32700eb3f6fb8d0b3f416c3fb52ab5eca35dc82393341eb7bb52676b6b003",
+        "c2f18432229c945b816f8b9f9cfa40d2964454b033efea804f6cd03942865bd4",
+    ),
+    "2_5_192": (
+        "22a302e8a39e545c7372ca96fe8698e3cbbc7d3906f60316e0617c15616f8894",
+        "4b7370b9880577f12f31942049d19610a4559c8af38f39dc67d1f90ec9663aa1",
+    ),
+    "2_5_224": (
+        "98d047950e59f478af63681720906940efc8ce8cecb95bce5c7b47394f8bd63d",
+        "dbdb03ee2a22fd895301636cd328b234bb3a9952358f436d82f46b81e0d5b0bf",
+    ),
+}
 
 
 @keras_export(
@@ -257,18 +325,20 @@ def MobileNet(
         else:
             alpha_text = "2_5"
 
+        weights_hashes = WEIGHTS_HASHES[f"{alpha_text}_{rows}"]
         if include_top:
             model_name = "mobilenet_%s_%d_tf.h5" % (alpha_text, rows)
-            weight_path = BASE_WEIGHT_PATH + model_name
-            weights_path = file_utils.get_file(
-                model_name, weight_path, cache_subdir="models"
-            )
+            file_hash = weights_hashes[0]
         else:
             model_name = "mobilenet_%s_%d_tf_no_top.h5" % (alpha_text, rows)
-            weight_path = BASE_WEIGHT_PATH + model_name
-            weights_path = file_utils.get_file(
-                model_name, weight_path, cache_subdir="models"
-            )
+            file_hash = weights_hashes[1]
+        weight_path = BASE_WEIGHT_PATH + model_name
+        weights_path = file_utils.get_file(
+            model_name,
+            weight_path,
+            cache_subdir="models",
+            file_hash=file_hash,
+        )
         model.load_weights(weights_path)
     elif weights is not None:
         model.load_weights(weights)
