@@ -82,3 +82,45 @@ class PoolingChannelsLastContiguityTest(testing.TestCase):
         x = torch.randn((2, 6, 6, 6, 4))
         out = ops.max_pool(x, (2, 2, 2), data_format="channels_last")
         self.assertTrue(out.is_contiguous())
+
+
+class ConvVectorizedMapTest(testing.TestCase):
+    def test_vectorized_map_conv3d_channels_last(self):
+        # Regression test for #23587: channels_last conv used to query
+        # `is_contiguous(memory_format=channels_last_3d)` inside torch.vmap.
+        def conv_one(sample):
+            sample = ops.expand_dims(sample, axis=0)
+            kernel = ops.ones((3, 3, 3, 1, 1), dtype="float32")
+            return ops.conv(
+                sample, kernel, padding="same", data_format="channels_last"
+            )[0]
+
+        batch = ops.ones((2, 8, 8, 8, 1), dtype="float32")
+        result = ops.vectorized_map(conv_one, batch)
+        expected = ops.conv(
+            batch,
+            ops.ones((3, 3, 3, 1, 1), dtype="float32"),
+            padding="same",
+            data_format="channels_last",
+        )
+        self.assertEqual(tuple(result.shape), (2, 8, 8, 8, 1))
+        self.assertAllClose(result, expected)
+
+    def test_vectorized_map_conv2d_channels_last(self):
+        def conv_one(sample):
+            sample = ops.expand_dims(sample, axis=0)
+            kernel = ops.ones((3, 3, 1, 1), dtype="float32")
+            return ops.conv(
+                sample, kernel, padding="same", data_format="channels_last"
+            )[0]
+
+        batch = ops.ones((2, 8, 8, 1), dtype="float32")
+        result = ops.vectorized_map(conv_one, batch)
+        expected = ops.conv(
+            batch,
+            ops.ones((3, 3, 1, 1), dtype="float32"),
+            padding="same",
+            data_format="channels_last",
+        )
+        self.assertEqual(tuple(result.shape), (2, 8, 8, 1))
+        self.assertAllClose(result, expected)

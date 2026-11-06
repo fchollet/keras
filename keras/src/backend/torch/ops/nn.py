@@ -308,6 +308,21 @@ def _apply_same_padding(
     return tnn.pad(inputs, pad=tuple(flattened_padding), mode=padding_mode), 0
 
 
+def _contiguous_with_optional_memory_format(tensor, memory_format=None):
+    """Return a contiguous tensor, optionally in `memory_format`.
+
+    Under `torch.vmap`, converting to `channels_last` / `channels_last_3d`
+    is NYI (#23587). Fall back to the default contiguous layout in that
+    case; dimension order is unchanged either way.
+    """
+    if memory_format is None:
+        return tensor.contiguous()
+    try:
+        return tensor.contiguous(memory_format=memory_format)
+    except RuntimeError:
+        return tensor.contiguous()
+
+
 def _transpose_spatial_inputs(inputs, channels_last_memory_format=False):
     """Transpose inputs from channels_last to channels_first format."""
     # Torch pooling does not support `channels_last` format, so
@@ -326,14 +341,14 @@ def _transpose_spatial_inputs(inputs, channels_last_memory_format=False):
         return torch.permute(inputs, (0, 2, 1)).contiguous()
     elif ndim == 2:  # 2D case
         inputs = torch.permute(inputs, (0, 3, 1, 2))
-        if channels_last_memory_format:
-            return inputs.contiguous(memory_format=torch.channels_last)
-        return inputs.contiguous()
+        mem_fmt = torch.channels_last if channels_last_memory_format else None
+        return _contiguous_with_optional_memory_format(inputs, mem_fmt)
     elif ndim == 3:  # 3D case
         inputs = torch.permute(inputs, (0, 4, 1, 2, 3))
-        if channels_last_memory_format:
-            return inputs.contiguous(memory_format=torch.channels_last_3d)
-        return inputs.contiguous()
+        mem_fmt = (
+            torch.channels_last_3d if channels_last_memory_format else None
+        )
+        return _contiguous_with_optional_memory_format(inputs, mem_fmt)
     raise ValueError(
         "Inputs must have ndim=3, 4 or 5, "
         "corresponding to 1D, 2D and 3D inputs. "
@@ -376,8 +391,17 @@ def _get_channels_last_memory_format(ndim):
 
 def _maybe_convert_to_channels_last(tensor):
     mem_fmt = _get_channels_last_memory_format(tensor.ndim)
-    if mem_fmt is not None and not tensor.is_contiguous(memory_format=mem_fmt):
-        return tensor.contiguous(memory_format=mem_fmt)
+    if mem_fmt is None:
+        return tensor
+    # Layout conversion is a performance hint only. Under `torch.vmap`,
+    # `is_contiguous(memory_format=channels_last*)` is NYI (#23587), and
+    # other tracing contexts can raise too — skip conversion then.
+    try:
+        is_contiguous = tensor.is_contiguous(memory_format=mem_fmt)
+    except RuntimeError:
+        return tensor
+    if not is_contiguous:
+        return _contiguous_with_optional_memory_format(tensor, mem_fmt)
     return tensor
 
 
