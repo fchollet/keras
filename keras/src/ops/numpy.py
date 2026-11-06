@@ -3033,7 +3033,7 @@ def dot(x1, x2):
 
 class Dstack(Operation):
     def call(self, xs):
-        return backend.ops.numpy.dstack(xs)
+        return _dstack(xs)
 
     def compute_output_spec(self, xs):
         dtypes_to_resolve = []
@@ -3102,7 +3102,30 @@ def dstack(xs):
     """
     if any_symbolic_tensors((xs,)):
         return Dstack().symbolic_call(xs)
-    return backend.ops.numpy.dstack(xs)
+    return _dstack(xs)
+
+
+def _dstack(xs):
+    if not config._use_backend_agnostic_ops() and hasattr(
+        backend.ops.numpy, "dstack"
+    ):
+        return backend.ops.numpy.dstack(xs)
+    xs = [
+        x if isinstance(x, (int, float)) else backend.ops.convert_to_tensor(x)
+        for x in xs
+    ]
+    dtype = dtypes.result_type(*[getattr(x, "dtype", type(x)) for x in xs])
+    xs_reshaped = []
+    for x in xs:
+        x = backend.ops.cast(x, dtype)
+        if len(x.shape) == 0:
+            x = backend.ops.numpy.expand_dims(x, axis=(0, 1, 2))
+        elif len(x.shape) == 1:
+            x = backend.ops.numpy.expand_dims(x, axis=(0, 2))
+        elif len(x.shape) == 2:
+            x = backend.ops.numpy.expand_dims(x, axis=2)
+        xs_reshaped.append(x)
+    return backend.ops.numpy.concatenate(xs_reshaped, axis=2)
 
 
 class Einsum(Operation):
