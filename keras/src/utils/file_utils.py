@@ -305,7 +305,8 @@ def get_file(
     datadir_base = os.path.expanduser(cache_dir)
     if not os.access(datadir_base, os.W_OK):
         datadir_base = os.path.join(
-            "/tmp" if os.path.isdir("/tmp") else tempfile.gettempdir(), ".keras"
+            "/tmp" if os.path.isdir("/tmp") else tempfile.gettempdir(),
+            config.tmp_keras_dir_name(),
         )
     datadir = os.path.join(datadir_base, cache_subdir)
     os.makedirs(datadir, exist_ok=True)

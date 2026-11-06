@@ -397,15 +397,24 @@ def standardize_data_format(data_format):
     return data_format
 
 
+def tmp_keras_dir_name():
+    # Private helper returning the name of the `.keras` directory used when
+    # falling back to a tmp location. That location is shared by all local
+    # users, so the name is made user specific to give each user their own.
+    if hasattr(os, "getuid"):
+        return f".keras-{os.getuid()}"
+    return ".keras"
+
+
 # Set Keras base dir path given KERAS_HOME env variable, if applicable.
-# Otherwise either ~/.keras or /tmp.
+# Otherwise either ~/.keras or /tmp/.keras-<uid>.
 if "KERAS_HOME" in os.environ:
     _KERAS_DIR = os.environ.get("KERAS_HOME")
 else:
     _keras_base_dir = os.path.expanduser("~")
-    if not os.access(_keras_base_dir, os.W_OK):
-        _keras_base_dir = "/tmp"
     _KERAS_DIR = os.path.join(_keras_base_dir, ".keras")
+    if not os.access(_keras_base_dir, os.W_OK):
+        _KERAS_DIR = os.path.join("/tmp", tmp_keras_dir_name())
 
 
 def keras_home():

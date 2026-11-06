@@ -490,6 +490,52 @@ class GetFileTest(test_case.TestCase):
             ):
                 _ = file_utils.get_file(origin=origin, cache_dir=cache_dir)
 
+    def test_get_file_tmp_fallback_is_per_user(self):
+        """Each user gets their own fallback dir in a shared tmp location."""
+        if not hasattr(os, "getuid"):
+            self.skipTest("Per-user fallback dirs require `os.getuid`.")
+        fake_tmp = os.path.join(self.get_temp_dir(), "tmp")
+        # A shared `.keras` dir left behind by another user, which this user
+        # can't write to.
+        shared = os.path.join(fake_tmp, ".keras")
+        os.makedirs(shared)
+        os.chmod(shared, 0o555)
+
+        read_only_cache = os.path.join(self.get_temp_dir(), "cache")
+        os.makedirs(read_only_cache)
+        src_path = os.path.join(self.get_temp_dir(), "src.txt")
+        with open(src_path, "w") as f:
+            f.write("data")
+        origin = urllib.parse.urljoin(
+            "file://", urllib.request.pathname2url(os.path.abspath(src_path))
+        )
+
+        real_access = os.access
+
+        def fake_access(path, mode):
+            if os.path.abspath(path) == os.path.abspath(read_only_cache):
+                return False
+            return real_access(path, mode)
+
+        real_isdir = os.path.isdir
+
+        def fake_isdir(path):
+            return False if path == "/tmp" else real_isdir(path)
+
+        with (
+            patch("os.access", side_effect=fake_access),
+            patch("os.path.isdir", side_effect=fake_isdir),
+            patch("tempfile.gettempdir", return_value=fake_tmp),
+        ):
+            path = file_utils.get_file(
+                "f.txt", origin, cache_dir=read_only_cache
+            )
+
+        user_dir = os.path.join(fake_tmp, f".keras-{os.getuid()}")
+        self.assertEqual(path, os.path.join(user_dir, "datasets", "f.txt"))
+        with open(path) as f:
+            self.assertEqual(f.read(), "data")
+
     def _create_tar_file(self, directory):
         """Helper function to create a tar file."""
         text_file_path = os.path.join(directory, "test.txt")
