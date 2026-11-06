@@ -1466,21 +1466,28 @@ def diagonal(x, offset=0, axis1=0, axis2=1):
     x_shape = shape_op(x)
 
     def _zeros():
-        return tf.zeros(tf.concat([x_shape[:-1], [0]], 0), dtype=x.dtype)
+        lead = x_shape[:-2]
+        if not isinstance(lead, tf.Tensor):
+            lead = list(lead)
+        lead = tf.cast(lead, "int32")
+        return tf.zeros(tf.concat([lead, [0]], 0), dtype=x.dtype)
 
     if isinstance(x_shape[-1], int) and isinstance(x_shape[-2], int):
         if offset <= -1 * x_shape[-2] or offset >= x_shape[-1]:
-            x = _zeros()
-    else:
-        x = tf.cond(
-            tf.logical_or(
-                tf.less_equal(offset, -1 * x_shape[-2]),
-                tf.greater_equal(offset, x_shape[-1]),
-            ),
-            lambda: _zeros(),
-            lambda: x,
-        )
-    return tf.linalg.diag_part(x, k=offset)
+            return _zeros()
+        return tf.linalg.diag_part(x, k=offset)
+    return tf.cond(
+        tf.logical_or(
+            tf.less_equal(offset, -1 * x_shape[-2]),
+            tf.greater_equal(offset, x_shape[-1]),
+        ),
+        _zeros,
+        # Clamp `k` so that XLA can also compile the branch not taken.
+        lambda: tf.linalg.diag_part(
+            x,
+            k=tf.clip_by_value(offset, 1 - x_shape[-2], x_shape[-1] - 1),
+        ),
+    )
 
 
 def diff(a, n=1, axis=-1):
@@ -3809,14 +3816,11 @@ def eye(N, M=None, k=0, dtype=None):
     M = N if M is None else M
     if isinstance(k, int) and k == 0:
         return tf.eye(N, M, dtype=dtype)
-    # Create a smaller square eye and pad appropriately.
-    return tf.pad(
-        tf.eye(tf.minimum(M - k, N + k), dtype=dtype),
-        paddings=(
-            (tf.maximum(-k, 0), tf.maximum(N - M + k, 0)),
-            (tf.maximum(k, 0), tf.maximum(M - N - k, 0)),
-        ),
-    )
+    # Build the (shifted) diagonal from a mask, which also holds when
+    # `abs(k)` is larger than the matrix.
+    i = tf.range(N, dtype="int64")[:, None]
+    j = tf.range(M, dtype="int64")[None, :]
+    return tf.cast(tf.equal(j - i, tf.cast(k, "int64")), dtype)
 
 
 def floor_divide(x1, x2):

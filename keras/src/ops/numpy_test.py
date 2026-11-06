@@ -8785,6 +8785,40 @@ class NumpyArrayCreateOpsCorrectnessTest(testing.TestCase):
         # Test k < 0 and M < N and M - k > N
         self.assertAllClose(knp.eye(4, 3, k=-2), np.eye(4, 3, k=-2))
 
+    @parameterized.parameters(4, 5, -3, -5)
+    def test_out_of_range_offset(self, k):
+        x = np.arange(12, dtype="float32").reshape(3, 4)
+        self.assertAllClose(knp.diagonal(x, k), np.diagonal(x, k))
+        self.assertAllClose(knp.diag(x, k), np.diag(x, k))
+        self.assertAllClose(knp.trace(x, k), np.trace(x, k))
+        self.assertAllClose(knp.eye(3, 4, k=k), np.eye(3, 4, k=k))
+
+        x = np.ones([2, 3, 4], dtype="float32")
+        self.assertEqual(
+            knp.diagonal(x, k, axis1=1, axis2=2).shape,
+            np.diagonal(x, k, axis1=1, axis2=2).shape,
+        )
+        self.assertAllClose(
+            knp.trace(x, k, axis1=1, axis2=2),
+            np.trace(x, k, axis1=1, axis2=2),
+        )
+
+    @parameterized.product(k=[5, -5], jit_compile=[False, True])
+    @pytest.mark.skipif(
+        backend.backend() != "tensorflow",
+        reason="Only test tensorflow backend",
+    )
+    def test_out_of_range_offset_dynamic_shape(self, k, jit_compile):
+        import tensorflow as tf
+
+        x = np.ones([2, 3, 4], dtype="float32")
+        fn = tf.function(
+            lambda x: knp.diagonal(x, k, axis1=1, axis2=2),
+            input_signature=[tf.TensorSpec([None, None, None], "float32")],
+            jit_compile=jit_compile,
+        )
+        self.assertEqual(fn(x).shape, (2, 0))
+
     def test_eye_raises_error_with_floats(self):
         with self.assertRaises(TypeError):
             knp.eye(3.0)
