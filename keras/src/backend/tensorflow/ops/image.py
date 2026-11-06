@@ -702,17 +702,15 @@ def map_coordinates(
             return tf.clip_by_value(coords, 0, size - 1), tf.ones_like(
                 coords, dtype=tf.bool
             )
-        elif fill_mode in ["mirror", "reflect"]:
-            coords = tf.abs(coords)
-            size_2 = size * 2
-            mod = tf.math.mod(coords, size_2)
-            under = mod < size
-            over = ~under
-            # reflect mode is same as mirror for under
-            coords = tf.where(under, mod, size_2 - mod)
-            # for reflect mode, adjust the over case
-            if fill_mode == "reflect":
-                coords = tf.where(over, coords - 1, coords)
+        elif fill_mode == "mirror":
+            # Period is `2 * (size - 1)`; a size-1 axis maps to index 0.
+            if isinstance(size, int) and size == 1:
+                coords = tf.zeros_like(coords)
+            else:
+                coords = _mirror_index_fixer(coords, size)
+            return coords, tf.ones_like(coords, dtype=tf.bool)
+        elif fill_mode == "reflect":
+            coords = _reflect_index_fixer(coords, size)
             return coords, tf.ones_like(coords, dtype=tf.bool)
         elif fill_mode == "wrap":
             coords = tf.math.mod(coords, size)

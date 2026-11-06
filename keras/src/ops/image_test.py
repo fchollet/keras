@@ -2292,9 +2292,9 @@ class ImageOpsCorrectnessTest(testing.TestCase):
             input_shape
         )
         coordinates_dtype = "float32" if "int" in dtype else dtype
+        # Sample past both edges so every `fill_mode` is exercised.
         coordinates = [
-            (size - 1)
-            * np.random.uniform(size=coordinates_shape).astype(
+            np.random.uniform(-size, 2 * size, size=coordinates_shape).astype(
                 coordinates_dtype
             )
             for size in input_shape
