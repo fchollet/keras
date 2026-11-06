@@ -2,11 +2,15 @@ import json
 import os
 
 import numpy as np
+from absl.testing import parameterized
 
+from keras.src import dtype_policies
 from keras.src import layers
 from keras.src import models
 from keras.src import saving
 from keras.src import testing
+from keras.src.quantizers.awq_config import AWQConfig
+from keras.src.quantizers.gptq_config import GPTQConfig
 from keras.src.quantizers.quantization_config import Int4QuantizationConfig
 from keras.src.quantizers.quantization_config import Int8QuantizationConfig
 from keras.src.quantizers.quantization_config import QuantizationConfig
@@ -269,3 +273,130 @@ class Int4ConfigListValueRangeTest(testing.TestCase):
         self.assertEqual(loaded_config.block_size, -1)
         self.assertAllEqual(loaded_config.weight_quantizer.value_range, (-8, 7))
         self.assertAllEqual(loaded_model(x), y)
+
+
+_DATASET = [np.ones((1, 4), "float32")]
+
+
+class ConfigMatchesPolicyTest(testing.TestCase):
+    @parameterized.named_parameters(
+        (
+            "other_mode",
+            "int8_from_float32",
+            lambda: Int4QuantizationConfig(block_size=8),
+            "quantization_config.mode='int4'",
+        ),
+        (
+            # float8 keeps the float kernel, which `Dense.build` adds
+            # before the mode's variables.
+            "float8_other_mode",
+            "float8_from_float32",
+            lambda: Int8QuantizationConfig(),
+            "quantization_config.mode='int8'",
+        ),
+        (
+            "other_block_size",
+            "int4/4_from_float32",
+            lambda: Int4QuantizationConfig(block_size=8),
+            "quantization_config.block_size=8",
+        ),
+        (
+            "grouped_config_per_channel_policy",
+            "int4/-1_from_float32",
+            lambda: Int4QuantizationConfig(block_size=8),
+            "quantization_config.block_size=8",
+        ),
+        (
+            "other_weight_bits",
+            "gptq/4/8_from_float32",
+            lambda: GPTQConfig(
+                dataset=_DATASET, tokenizer=None, weight_bits=2, group_size=8
+            ),
+            "quantization_config.weight_bits=2",
+        ),
+        (
+            "other_group_size",
+            "awq/4/8_from_float32",
+            lambda: AWQConfig(dataset=_DATASET, tokenizer=None, group_size=4),
+            "quantization_config.group_size=4",
+        ),
+    )
+    def test_build_refuses_a_contradictory_config(
+        self, policy, make_config, message
+    ):
+        layer = layers.Dense(8, dtype=policy, quantization_config=make_config())
+        with self.assertRaisesRegex(
+            ValueError, f"Contradictory arguments: dtype_policy='{policy}'"
+        ) as cm:
+            layer.build((None, 16))
+        self.assertIn(message, str(cm.exception))
+        # The refusal comes before the mode creates a variable.
+        self.assertFalse(layer.built)
+        self.assertEqual(layer.variables, [])
+
+    def test_map_entry_is_checked_at_build(self):
+        # The layer's own entry of a `DTypePolicyMap` is the policy that
+        # the config must agree with.
+        policy_map = dtype_policies.DTypePolicyMap()
+        policy_map["target"] = "int4/4_from_float32"
+        layer = layers.Dense(
+            8,
+            name="target",
+            dtype=policy_map,
+            quantization_config=Int4QuantizationConfig(block_size=8),
+        )
+        with self.assertRaisesRegex(
+            ValueError,
+            "Contradictory arguments: dtype_policy='int4/4_from_float32' but "
+            "quantization_config.block_size=8",
+        ):
+            layer.build((None, 16))
+        self.assertEqual(layer.variables, [])
+
+    def test_policy_set_after_the_config_is_checked_at_build(self):
+        layer = layers.Dense(
+            8, quantization_config=Int4QuantizationConfig(block_size=8)
+        )
+        layer.dtype_policy = "int4/4_from_float32"
+        with self.assertRaisesRegex(
+            ValueError,
+            "Contradictory arguments: dtype_policy='int4/4_from_float32' but "
+            "quantization_config.block_size=8",
+        ):
+            layer.build((None, 16))
+        self.assertEqual(layer.variables, [])
+
+    @parameterized.named_parameters(
+        ("grouped", "int4/8_from_float32", 8),
+        ("per_channel_none", "int4/-1_from_float32", None),
+        ("per_channel_legacy_none", "int4/None_from_float32", -1),
+        # A legacy bare "int4" name states no block size, so the config
+        # gives it, as in a file that the policy setter of Keras 3.14 and
+        # 3.15 wrote.
+        ("legacy_bare", "int4_from_float32", 8),
+    )
+    def test_agreeing_config_builds_and_reloads(self, policy, block_size):
+        config = Int4QuantizationConfig(block_size=block_size)
+        inputs = layers.Input((16,))
+        layer = layers.Dense(8, dtype=policy, quantization_config=config)
+        model = models.Model(inputs, layer(inputs))
+        x = np.random.default_rng(0).standard_normal((2, 16))
+        groups = 1 if block_size in (None, -1) else 16 // block_size
+        expected = (8,) if groups == 1 else (groups, 8)
+        self.assertEqual(tuple(layer.kernel_scale.shape), expected)
+
+        filepath = os.path.join(self.get_temp_dir(), "model.keras")
+        model.save(filepath)
+        restored = saving.load_model(filepath)
+        self.assertAllEqual(restored(x), model(x))
+
+        if policy != "int4_from_float32":
+            # The name alone builds the same variables.
+            policy_map = dtype_policies.DTypePolicyMap()
+            policy_map[layer.path] = policy
+            twin = layers.Dense(8, dtype=policy_map, name=layer.name)
+            twin.build((None, 16))
+            store = {}
+            layer.save_own_variables(store)
+            twin.load_own_variables(store)
+            self.assertAllEqual(twin(x), layer(x))

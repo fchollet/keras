@@ -246,6 +246,9 @@ class Layer(BackendLayer, Operation):
         def build_wrapper(*args, **kwargs):
             with obj._open_name_scope():
                 obj._path = current_path()
+                # Before any variable exists: the layer builds from its
+                # policy name and the config it holds, which must agree.
+                obj._check_config_matches_policy(obj.quantization_config)
                 original_build_method(*args, **kwargs)
             # Record build config.
             signature = inspect.signature(original_build_method)
@@ -1470,6 +1473,40 @@ class Layer(BackendLayer, Operation):
             self.quantization_config = config
         strategy.build(self, input_shape, config)
         self._is_quantized = True
+
+    def _check_config_matches_policy(self, config):
+        """Raises if `config` contradicts the layer's quantized dtype policy.
+
+        The policy name fixes a quantized layer's variables: a layer built
+        from the name alone, as a `DTypePolicyMap` reload builds it, must
+        hold the variables that a build from `config` creates. `config`
+        must have the policy's mode and every block size, bit width and
+        group size that the name states. A legacy bare `"int4"` name states
+        no block size, so `config` gives it.
+        """
+        if config is None:
+            return
+        policy = self._own_dtype_policy
+        if policy.quantization_mode is None:
+            return
+        if config.mode != policy.quantization_mode:
+            raise ValueError(
+                f"Contradictory arguments: dtype_policy='{policy.name}' but "
+                f"quantization_config.mode='{config.mode}'"
+            )
+        for name in ("block_size", "weight_bits", "group_size"):
+            if not (hasattr(policy, name) and hasattr(config, name)):
+                continue
+            # `None` and -1 both select per-channel quantization.
+            stated, given = (
+                -1 if value is None else value
+                for value in (getattr(policy, name), getattr(config, name))
+            )
+            if stated != given:
+                raise ValueError(
+                    f"Contradictory arguments: dtype_policy='{policy.name}' "
+                    f"but quantization_config.{name}={getattr(config, name)}"
+                )
 
     def quantize(self, mode=None, type_check=True, config=None):
         """Quantizes this layer in place.
