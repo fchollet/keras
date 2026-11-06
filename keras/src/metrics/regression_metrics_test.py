@@ -448,6 +448,33 @@ class R2ScoreTest(testing.TestCase):
             reference_result=0.0,
         )
 
+    def test_r2_targets_with_large_offset(self):
+        y_true = np.array([[0.0], [0.1], [0.2], [0.3]])
+        y_pred = y_true + np.array([[0.05], [-0.05], [0.05], [-0.05]])
+        self._run_test(
+            y_true,
+            y_pred,
+            None,
+            class_aggregation="uniform_average",
+            num_regressors=0,
+            reference_result=0.8,
+        )
+        r2 = metrics.R2Score(dtype="float32")
+        r2.update_state(y_true + 1000.0, y_pred + 1000.0)
+        self.assertAllClose(r2.result(), 0.8, atol=1e-3)
+
+    def test_r2_zero_variance_non_integer_targets(self):
+        y_true = [[0.7], [0.7], [0.7], [0.7], [0.7]]
+        y_pred = [[0.6], [0.7], [0.8], [0.9], [1.0]]
+        self._run_test(
+            y_true,
+            y_pred,
+            None,
+            class_aggregation="uniform_average",
+            num_regressors=0,
+            reference_result=0.0,
+        )
+
     def test_r2_nan_total_mse_propagates(self):
         # y_true has normal (nonzero) variance, but one prediction is NaN
         # (e.g. from a diverged model). This must surface as NaN, not be

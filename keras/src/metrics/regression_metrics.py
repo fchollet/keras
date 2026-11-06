@@ -476,6 +476,11 @@ class R2Score(reduction_metrics.Metric):
             shape=[num_classes],
             initializer=initializers.Zeros(),
         )
+        self.shift = self.add_variable(
+            name="shift",
+            shape=[num_classes],
+            initializer=initializers.Zeros(),
+        )
         self._built = True
 
     def update_state(self, y_true, y_pred, sample_weight=None):
@@ -510,10 +515,23 @@ class R2Score(reduction_metrics.Metric):
         sample_weight = ops.broadcast_to(sample_weight, ops.shape(y_true))
 
         sample_weight = ops.cast(sample_weight, y_true.dtype)
-        weighted_y_true = y_true * sample_weight
+        # Accumulating raw y and y**2 loses the variance to cancellation when
+        # the targets sit far from zero, so the sums are taken around a shift.
+        batch_mean = ops.divide_no_nan(
+            ops.sum(y_true * sample_weight, axis=0),
+            ops.sum(sample_weight, axis=0),
+        )
+        shift = ops.where(
+            ops.equal(self.count.value, 0.0),
+            batch_mean,
+            self.shift.value,
+        )
+        self.shift.assign(shift)
+        shifted_y_true = y_true - shift
+        weighted_y_true = shifted_y_true * sample_weight
         self.sum.assign(self.sum + ops.sum(weighted_y_true, axis=0))
         self.squared_sum.assign(
-            self.squared_sum + ops.sum(y_true * weighted_y_true, axis=0)
+            self.squared_sum + ops.sum(shifted_y_true * weighted_y_true, axis=0)
         )
         self.total_mse.assign(
             self.total_mse
