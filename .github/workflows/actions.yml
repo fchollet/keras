@@ -23,6 +23,9 @@ jobs:
     secrets:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
+  tf_free_tests:
+    uses: ./.github/workflows/tf_free_tests.yml # zizmor: ignore[self-repository]
+
   format:
     name: Check the code format
     runs-on: ubuntu-latest
