@@ -1974,6 +1974,53 @@ class Layer(BackendLayer, Operation):
 
         super().__setattr__(name, value)
 
+    # Attribute names that mirror what has been tracked — the tracker's own
+    # store lists plus the torch.nn.Module registries on the torch backend —
+    # rather than references the layer still holds. They are skipped when
+    # looking for aliases of a deleted attribute.
+    _UNTRACK_ALIAS_SCAN_EXCLUSIONS = frozenset(
+        {
+            "_trainable_variables",
+            "_non_trainable_variables",
+            "_layers",
+            "_metrics",
+            "_seed_generators",
+            "_modules",
+            "_parameters",
+            "_buffers",
+        }
+    )
+
+    def _is_referenced_elsewhere(self, obj, skip_name):
+        others = {
+            k: v
+            for k, v in self.__dict__.items()
+            if k != skip_name and k not in self._UNTRACK_ALIAS_SCAN_EXCLUSIONS
+        }
+        return any(leaf is obj for leaf in tree.flatten(others))
+
+    def _untrack(self, obj, skip_name):
+        """Untracks `obj` unless another attribute still references it.
+
+        Recurses into containers so that sub-layers, variables, metrics and
+        seed generators stored in a deleted list/dict/set attribute are
+        untracked as well.
+        """
+        if not hasattr(self, "_tracker"):
+            return
+        if isinstance(obj, dict):
+            obj = list(obj.values())
+        if isinstance(obj, (list, tuple, set)):
+            for element in obj:
+                self._untrack(element, skip_name)
+        elif not self._is_referenced_elsewhere(obj, skip_name):
+            if isinstance(obj, backend.Variable):
+                self._untrack_variable(obj)
+            else:
+                # Handles layers, metrics and seed generators alike, since
+                # Tracker.untrack removes the object from every store.
+                self._tracker.untrack(obj)
+
     def __delattr__(self, name):
         obj = getattr(self, name)
         if isinstance(obj, backend.Variable):
@@ -1986,6 +2033,16 @@ class Layer(BackendLayer, Operation):
             super().__delattr__(name)
             gc.collect()
         else:
+            # Only attributes that were stored on assignment were tracked:
+            # they live in `__dict__`, except on the torch backend, where
+            # torch.nn.Module keeps Module-valued attributes in `_modules`.
+            # Properties such as `weights` or `layers` also return
+            # containers, but deleting them falls through to the default
+            # behavior.
+            if name in self.__dict__ or (
+                hasattr(self, "_modules") and name in self._modules
+            ):
+                self._untrack(obj, name)
             super().__delattr__(name)
 
     def _check_super_called(self):
