@@ -147,6 +147,14 @@ class TFOptimizer(KerasAutoTrackable, base_optimizer.BaseOptimizer):
         self, distribution, grads_and_vars, learning_rate
     ):
         def apply_grad_to_update_var(var, grad, learning_rate):
+            if isinstance(grad, tf.IndexedSlices):
+                # Aggregate repeated indices before nonlinear optimizer math.
+                # All-reduce can introduce duplicates across replicas too.
+                indices, segment_ids = tf.unique(grad.indices)
+                values = tf.math.unsorted_segment_sum(
+                    grad.values, segment_ids, tf.shape(indices)[0]
+                )
+                grad = tf.IndexedSlices(values, indices, grad.dense_shape)
             return self.update_step(grad, var, learning_rate)
 
         for grad, var in grads_and_vars:
