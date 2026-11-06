@@ -210,9 +210,6 @@ class Resizing(BaseImagePreprocessingLayer):
 
     def _transform_xyxy(self, boxes, input_height, input_width):
         ops = self.backend.ops
-        input_height = ops.cast(input_height, dtype=boxes.dtype)
-        input_width = ops.cast(input_width, dtype=boxes.dtype)
-
         if self.pad_to_aspect_ratio:
             return self._transform_boxes_pad_to_aspect_ratio(
                 boxes, input_height, input_width
@@ -222,6 +219,8 @@ class Resizing(BaseImagePreprocessingLayer):
                 boxes, input_height, input_width
             )
         else:
+            input_height = ops.cast(input_height, dtype=boxes.dtype)
+            input_width = ops.cast(input_width, dtype=boxes.dtype)
             return self._transform_boxes_stretch(
                 boxes, input_height, input_width
             )
@@ -229,19 +228,38 @@ class Resizing(BaseImagePreprocessingLayer):
     def _transform_boxes_pad_to_aspect_ratio(
         self, boxes, input_height, input_width
     ):
-        """Transforms bounding boxes for padding to aspect ratio."""
+        """Transforms bounding boxes for padding to aspect ratio.
+
+        Follows the integer padding geometry of the image path: the image
+        is padded by `img_box_hstart` / `img_box_wstart` pixels on each
+        side, so the padded size is `input_size + 2 * offset`, which can be
+        one pixel less than `pad_height` / `pad_width`.
+        """
         ops = self.backend.ops
-        height_ratio = ops.cast(self.height / input_height, dtype=boxes.dtype)
-        width_ratio = ops.cast(self.width / input_width, dtype=boxes.dtype)
-        min_aspect_ratio = ops.numpy.minimum(height_ratio, width_ratio)
-        y_offset = (self.height - input_height * min_aspect_ratio) // 2
-        x_offset = (self.width - input_width * min_aspect_ratio) // 2
+        input_height = ops.cast(input_height, "int32")
+        input_width = ops.cast(input_width, "int32")
+        pad_height = ops.numpy.maximum(
+            input_height, input_width * self.height // self.width
+        )
+        pad_width = ops.numpy.maximum(
+            input_width, input_height * self.width // self.height
+        )
+        img_box_hstart = (pad_height - input_height) // 2
+        img_box_wstart = (pad_width - input_width) // 2
+        y_offset = ops.cast(img_box_hstart, boxes.dtype)
+        x_offset = ops.cast(img_box_wstart, boxes.dtype)
+        y_scale = self.height / ops.cast(
+            input_height + 2 * img_box_hstart, boxes.dtype
+        )
+        x_scale = self.width / ops.cast(
+            input_width + 2 * img_box_wstart, boxes.dtype
+        )
         return ops.numpy.stack(
             [
-                boxes[..., 0] * min_aspect_ratio + x_offset,
-                boxes[..., 1] * min_aspect_ratio + y_offset,
-                boxes[..., 2] * min_aspect_ratio + x_offset,
-                boxes[..., 3] * min_aspect_ratio + y_offset,
+                (boxes[..., 0] + x_offset) * x_scale,
+                (boxes[..., 1] + y_offset) * y_scale,
+                (boxes[..., 2] + x_offset) * x_scale,
+                (boxes[..., 3] + y_offset) * y_scale,
             ],
             axis=-1,
         )
@@ -249,30 +267,39 @@ class Resizing(BaseImagePreprocessingLayer):
     def _transform_boxes_crop_to_aspect_ratio(
         self, boxes, input_height, input_width
     ):
-        """Transforms bounding boxes for cropping to aspect ratio."""
+        """Transforms bounding boxes for cropping to aspect ratio.
+
+        Follows the integer crop geometry of the image path: the image is
+        cropped to `crop_height` x `crop_width` starting at
+        `crop_box_hstart` / `crop_box_wstart`, then resized to the target.
+        """
         ops = self.backend.ops
-        source_aspect_ratio = input_width / input_height
-        target_aspect_ratio = self.width / self.height
-        new_width = ops.numpy.where(
-            source_aspect_ratio > target_aspect_ratio,
-            self.height * source_aspect_ratio,
-            self.width,
+        input_height = ops.cast(input_height, "int32")
+        input_width = ops.cast(input_width, "int32")
+        crop_height = ops.numpy.maximum(
+            ops.numpy.minimum(
+                input_height, input_width * self.height // self.width
+            ),
+            1,
         )
-        new_height = ops.numpy.where(
-            source_aspect_ratio > target_aspect_ratio,
-            self.height,
-            self.width / source_aspect_ratio,
+        crop_width = ops.numpy.maximum(
+            ops.numpy.minimum(
+                input_width, input_height * self.width // self.height
+            ),
+            1,
         )
-        scale_x = new_width / input_width
-        scale_y = new_height / input_height
-        crop_left = (new_width - self.width) // 2
-        crop_top = (new_height - self.height) // 2
+        crop_box_hstart = (input_height - crop_height) // 2
+        crop_box_wstart = (input_width - crop_width) // 2
+        y_offset = ops.cast(crop_box_hstart, boxes.dtype)
+        x_offset = ops.cast(crop_box_wstart, boxes.dtype)
+        y_scale = self.height / ops.cast(crop_height, boxes.dtype)
+        x_scale = self.width / ops.cast(crop_width, boxes.dtype)
         return ops.numpy.stack(
             [
-                boxes[..., 0] * scale_x - crop_left,
-                boxes[..., 1] * scale_y - crop_top,
-                boxes[..., 2] * scale_x - crop_left,
-                boxes[..., 3] * scale_y - crop_top,
+                (boxes[..., 0] - x_offset) * x_scale,
+                (boxes[..., 1] - y_offset) * y_scale,
+                (boxes[..., 2] - x_offset) * x_scale,
+                (boxes[..., 3] - y_offset) * y_scale,
             ],
             axis=-1,
         )

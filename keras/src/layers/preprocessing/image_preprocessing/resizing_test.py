@@ -228,7 +228,7 @@ class ResizingTest(testing.TestCase):
             "with_crop_to_aspect_ratio",
             False,
             True,
-            [[5.0, 0.5, 10.0, 5.5], [15.0, 8.0, 20.0, 13.0]],
+            [[5.0, 0.0, 10.0, 5.0], [15.0, 7.5, 20.0, 12.5]],
         ),
         (
             "boxes_stretch",
@@ -266,6 +266,75 @@ class ResizingTest(testing.TestCase):
         self.assertAllClose(output["bounding_boxes"]["boxes"], expected_boxes)
 
     @parameterized.named_parameters(
+        # The image path crops the 65x97 input to 65x96 at offset (0, 0),
+        # then resizes it to 53x79.
+        (
+            "crop",
+            False,
+            True,
+            (65, 97),
+            (53, 79),
+            [15.964583, 10.6, 63.858333, 42.4],
+        ),
+        # The image path pads the 31x47 input to 31x47 (no padding), then
+        # resizes it to 19x29.
+        (
+            "pad",
+            True,
+            False,
+            (31, 47),
+            (19, 29),
+            [5.8, 3.8, 23.2, 15.2],
+        ),
+        # Padding with an odd remainder: the image path pads the 10x5 input
+        # by 2 columns on each side (9 columns, one less than
+        # `pad_width=10`), then resizes it to 20x20.
+        (
+            "pad_odd_remainder",
+            True,
+            False,
+            (10, 5),
+            (20, 20),
+            [6.666667, 4.0, 13.333333, 16.0],
+        ),
+    )
+    def test_resize_bounding_boxes_follow_image_geometry(
+        self,
+        pad_to_aspect_ratio,
+        crop_to_aspect_ratio,
+        input_size,
+        target_size,
+        expected_box,
+    ):
+        # Regression test for
+        # https://github.com/keras-team/keras/issues/23772: boxes must follow
+        # the integer crop/pad geometry that is applied to the images.
+        height, width = input_size
+        if backend.config.image_data_format() == "channels_last":
+            image_shape = (1, height, width, 1)
+        else:
+            image_shape = (1, 1, height, width)
+        box = [0.2 * width, 0.2 * height, 0.8 * width, 0.8 * height]
+        input_data = {
+            "images": np.zeros(image_shape, "float32"),
+            "bounding_boxes": {
+                "boxes": np.array([[box]], "float32"),
+                "labels": np.array([[1]]),
+            },
+        }
+        resizing_layer = layers.Resizing(
+            height=target_size[0],
+            width=target_size[1],
+            pad_to_aspect_ratio=pad_to_aspect_ratio,
+            crop_to_aspect_ratio=crop_to_aspect_ratio,
+            bounding_box_format="xyxy",
+        )
+        output = resizing_layer(input_data)
+        self.assertAllClose(
+            output["bounding_boxes"]["boxes"], [[expected_box]], atol=1e-4
+        )
+
+    @parameterized.named_parameters(
         (
             "with_pad_to_aspect_ratio",
             True,
@@ -276,7 +345,7 @@ class ResizingTest(testing.TestCase):
             "with_crop_to_aspect_ratio",
             False,
             True,
-            [[5.0, 0.5, 10.0, 5.5], [15.0, 8.0, 20.0, 13.0]],
+            [[5.0, 0.0, 10.0, 5.0], [15.0, 7.5, 20.0, 12.5]],
         ),
         (
             "boxes_stretch",
