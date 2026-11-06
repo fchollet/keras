@@ -3,6 +3,7 @@ import itertools
 import math
 import warnings
 
+import jax.numpy as jnp
 import numpy as np
 import pytest
 from absl.testing import parameterized
@@ -16,6 +17,8 @@ from keras.src.backend.common import is_int_dtype
 from keras.src.backend.common import standardize_dtype
 from keras.src.backend.common.keras_tensor import KerasTensor
 from keras.src.ops import numpy as knp
+from keras.src.testing.op_test_case import X
+from keras.src.testing.op_test_case import named_dtype_combinations
 from keras.src.testing.test_utils import named_product
 
 BACKEND_AGNOSTIC_OPS = [
@@ -118,11 +121,6 @@ class NumPyTestRot90(testing.TestCase):
 
 
 class NumpyTwoInputOpsDynamicShapeTest(testing.TestCase):
-    def test_add(self):
-        x = KerasTensor((None, 3))
-        y = KerasTensor((2, None))
-        self.assertEqual(knp.add(x, y).shape, (2, 3))
-
     def test_heaviside(self):
         x = KerasTensor((None, 3))
         y = KerasTensor((None, 3))
@@ -152,11 +150,6 @@ class NumpyTwoInputOpsDynamicShapeTest(testing.TestCase):
         x = KerasTensor((None, 3))
         y = KerasTensor((2, None))
         self.assertEqual(knp.float_power(x, y).shape, (2, 3))
-
-    def test_power(self):
-        x = KerasTensor((None, 3))
-        y = KerasTensor((2, None))
-        self.assertEqual(knp.power(x, y).shape, (2, 3))
 
     def test_divide(self):
         x = KerasTensor((None, 3))
@@ -688,16 +681,6 @@ class NumpyTwoInputOpsDynamicShapeTest(testing.TestCase):
 
 
 class NumpyTwoInputOpsStaticShapeTest(testing.TestCase):
-    def test_add(self):
-        x = KerasTensor((2, 3))
-        y = KerasTensor((2, 3))
-        self.assertEqual(knp.add(x, y).shape, (2, 3))
-
-        with self.assertRaises(ValueError):
-            x = KerasTensor((2, 3))
-            y = KerasTensor((2, 3, 4))
-            knp.add(x, y)
-
     def test_heaviside(self):
         x = KerasTensor((2, 3))
         y = KerasTensor((2, 3))
@@ -795,19 +778,6 @@ class NumpyTwoInputOpsStaticShapeTest(testing.TestCase):
         x = KerasTensor((2, 3))
         y = KerasTensor((1, 3))
         self.assertEqual(knp.float_power(x, y).shape, (2, 3))
-
-    def test_power(self):
-        x = KerasTensor((2, 3))
-        y = KerasTensor((2, 3))
-        self.assertEqual(knp.power(x, y).shape, (2, 3))
-
-        x = KerasTensor((2, 3))
-        self.assertEqual(knp.power(x, 2).shape, (2, 3))
-
-        with self.assertRaises(ValueError):
-            x = KerasTensor((2, 3))
-            y = KerasTensor((2, 3, 4))
-            knp.power(x, y)
 
     def test_divide(self):
         x = KerasTensor((2, 3))
@@ -1522,14 +1492,6 @@ class NumpyOneInputOpsDynamicShapeTest(testing.TestCase):
         self.assertEqual(knp.var(x, axis=1).shape, (None, 3))
         self.assertEqual(knp.var(x, axis=1, keepdims=True).shape, (None, 1, 3))
 
-    def test_sum(self):
-        x = KerasTensor((None, 3))
-        self.assertEqual(knp.sum(x).shape, ())
-
-        x = KerasTensor((None, 3, 3))
-        self.assertEqual(knp.sum(x, axis=1).shape, (None, 3))
-        self.assertEqual(knp.sum(x, axis=1, keepdims=True).shape, (None, 1, 3))
-
     def test_min(self):
         x = KerasTensor((None, 3))
         self.assertEqual(knp.min(x).shape, ())
@@ -1537,10 +1499,6 @@ class NumpyOneInputOpsDynamicShapeTest(testing.TestCase):
         x = KerasTensor((None, 3, 3))
         self.assertEqual(knp.min(x, axis=1).shape, (None, 3))
         self.assertEqual(knp.min(x, axis=1, keepdims=True).shape, (None, 1, 3))
-
-    def test_square(self):
-        x = KerasTensor((None, 3))
-        self.assertEqual(knp.square(x).shape, (None, 3))
 
     def test_negative(self):
         x = KerasTensor((None, 3))
@@ -1557,22 +1515,6 @@ class NumpyOneInputOpsDynamicShapeTest(testing.TestCase):
     def test_absolute(self):
         x = KerasTensor((None, 3))
         self.assertEqual(knp.absolute(x).shape, (None, 3))
-
-    def test_squeeze(self):
-        x = KerasTensor((None, 1))
-        self.assertEqual(knp.squeeze(x).shape, (None,))
-        self.assertEqual(knp.squeeze(x, axis=1).shape, (None,))
-
-        with self.assertRaises(ValueError):
-            x = KerasTensor((None, 1))
-            knp.squeeze(x, axis=0)
-
-        # Multiple axes
-        x = KerasTensor((None, 1, 1, 1))
-        self.assertEqual(knp.squeeze(x, (1, 2)).shape, (None, 1))
-        self.assertEqual(knp.squeeze(x, (-1, -2)).shape, (None, 1))
-        self.assertEqual(knp.squeeze(x, (1, 2, 3)).shape, (None,))
-        self.assertEqual(knp.squeeze(x, (-1, 1)).shape, (None, 1))
 
     def test_transpose(self):
         x = KerasTensor((None, 3))
@@ -1741,10 +1683,6 @@ class NumpyOneInputOpsDynamicShapeTest(testing.TestCase):
         with self.assertRaises(ValueError):
             x = KerasTensor((3, 3))
             knp.broadcast_to(x, (2, 2, 3))
-
-    def test_cbrt(self):
-        x = KerasTensor((None, 3))
-        self.assertEqual(knp.cbrt(x).shape, (None, 3))
 
     def test_ceil(self):
         x = KerasTensor((None, 3))
@@ -2677,17 +2615,9 @@ class NumpyOneInputOpsStaticShapeTest(testing.TestCase):
         x = KerasTensor((2, 3))
         self.assertEqual(knp.var(x).shape, ())
 
-    def test_sum(self):
-        x = KerasTensor((2, 3))
-        self.assertEqual(knp.sum(x).shape, ())
-
     def test_min(self):
         x = KerasTensor((2, 3))
         self.assertEqual(knp.min(x).shape, ())
-
-    def test_square(self):
-        x = KerasTensor((2, 3))
-        self.assertEqual(knp.square(x).shape, (2, 3))
 
     def test_negative(self):
         x = KerasTensor((2, 3))
@@ -2704,25 +2634,6 @@ class NumpyOneInputOpsStaticShapeTest(testing.TestCase):
     def test_absolute(self):
         x = KerasTensor((2, 3))
         self.assertEqual(knp.absolute(x).shape, (2, 3))
-
-    def test_squeeze(self):
-        x = KerasTensor((2, 3))
-        self.assertEqual(knp.squeeze(x).shape, (2, 3))
-
-        x = KerasTensor((2, 1, 3))
-        self.assertEqual(knp.squeeze(x).shape, (2, 3))
-        self.assertEqual(knp.squeeze(x, axis=1).shape, (2, 3))
-        self.assertEqual(knp.squeeze(x, axis=-2).shape, (2, 3))
-
-        with self.assertRaises(ValueError):
-            knp.squeeze(x, axis=0)
-
-        # Multiple axes
-        x = KerasTensor((2, 1, 1, 1))
-        self.assertEqual(knp.squeeze(x, (1, 2)).shape, (2, 1))
-        self.assertEqual(knp.squeeze(x, (-1, -2)).shape, (2, 1))
-        self.assertEqual(knp.squeeze(x, (1, 2, 3)).shape, (2,))
-        self.assertEqual(knp.squeeze(x, (-1, 1)).shape, (2, 1))
 
     def test_transpose(self):
         x = KerasTensor((2, 3))
@@ -2796,10 +2707,6 @@ class NumpyOneInputOpsStaticShapeTest(testing.TestCase):
         with self.assertRaises(ValueError):
             x = KerasTensor((3, 3))
             knp.broadcast_to(x, (2, 2, 3))
-
-    def test_cbrt(self):
-        x = KerasTensor((2, 3))
-        self.assertEqual(knp.cbrt(x).shape, (2, 3))
 
     def test_ceil(self):
         x = KerasTensor((2, 3))
@@ -3552,63 +3459,6 @@ class NumpyOneInputOpsStaticShapeTest(testing.TestCase):
 
 
 class NumpyTwoInputOpsCorrectnessTest(testing.TestCase):
-    def test_add(self):
-        x = np.array([[1, 2, 3], [3, 2, 1]])
-        y = np.array([[4, 5, 6], [3, 2, 1]])
-        z = np.array([[[1, 2, 3], [3, 2, 1]]])
-        self.assertAllClose(knp.add(x, y), np.add(x, y))
-        self.assertAllClose(knp.add(x, z), np.add(x, z))
-
-        self.assertAllClose(knp.Add()(x, y), np.add(x, y))
-        self.assertAllClose(knp.Add()(x, z), np.add(x, z))
-
-    @pytest.mark.skipif(
-        not backend.SUPPORTS_RAGGED_TENSORS,
-        reason="Backend does not support ragged tensors.",
-    )
-    def test_add_ragged(self):
-        if backend.backend() == "tensorflow":
-            import tensorflow as tf
-
-            x = tf.ragged.constant(
-                [[[1, 2], [3, 4]], [[5, 6]]], ragged_rank=1, dtype="float32"
-            )
-            x_mask = x.with_values(tf.ones_like(x.flat_values))
-
-        x_np = backend.ops.convert_to_numpy(x)
-        x_mask_np = backend.ops.convert_to_numpy(x_mask)
-        y = np.ones((2, 1, 1), dtype="float32")
-        z = np.ones((2,), dtype="float32")
-
-        # ragged + ragged
-        self.assertAllClose(knp.add(x, x), np.add(x_np, x_np))
-        # ragged + dense
-        self.assertAllClose(knp.add(x, y), np.add(x_np, y) * x_mask_np)
-        # ragged + dense with broadcast
-        self.assertAllClose(knp.add(x, z), np.add(x_np, z) * x_mask_np)
-        # dense + ragged
-        self.assertAllClose(knp.add(y, x), np.add(y, x_np) * x_mask_np)
-        # dense + ragged with broadcast
-        self.assertAllClose(knp.add(z, x), np.add(z, x_np) * x_mask_np)
-
-    @pytest.mark.skipif(
-        backend.backend() != "tensorflow",
-        reason="Backend does not support strings.",
-    )
-    def test_add_strings(self):
-        import tensorflow as tf
-
-        x1 = tf.constant(["hello", "world"])
-        x2 = tf.constant(["foo", "bar"])
-
-        self.assertAllEqual(
-            knp.add(x1, x2),
-            np.add(
-                backend.ops.convert_to_numpy(x1),
-                backend.ops.convert_to_numpy(x2),
-            ),
-        )
-
     def test_heaviside(self):
         x = np.array([[1, 2, 3], [3, 2, 1]])
         y = np.array([[4, 5, 6], [6, 5, 4]])
@@ -3814,16 +3664,6 @@ class NumpyTwoInputOpsCorrectnessTest(testing.TestCase):
         y = np.array([[-1, -2, -3], [-1, -2, -3]])
         self.assertAllClose(knp.float_power(x, y), np.float_power(x, y))
         self.assertAllClose(knp.FloatPower()(x, y), np.float_power(x, y))
-
-    def test_power(self):
-        x = np.array([[1, 2, 3], [3, 2, 1]])
-        y = np.array([[4, 5, 6], [3, 2, 1]])
-        z = np.array([[[1, 2, 3], [3, 2, 1]]])
-        self.assertAllClose(knp.power(x, y), np.power(x, y))
-        self.assertAllClose(knp.power(x, z), np.power(x, z))
-
-        self.assertAllClose(knp.Power()(x, y), np.power(x, y))
-        self.assertAllClose(knp.Power()(x, z), np.power(x, z))
 
     def test_divide(self):
         x = np.array([[1, 2, 3], [3, 2, 1]])
@@ -5765,34 +5605,6 @@ class NumpyOneInputOpsCorrectnessTest(testing.TestCase):
             np.var(x, axis=1, keepdims=True),
         )
 
-    def test_sum(self):
-        x = np.array([[1, 2, 3], [3, 2, 1]])
-        self.assertAllClose(knp.sum(x), np.sum(x))
-        self.assertAllClose(knp.sum(x, axis=()), np.sum(x, axis=()))
-        self.assertAllClose(knp.sum(x, axis=1), np.sum(x, axis=1))
-        self.assertAllClose(knp.sum(x, axis=(1,)), np.sum(x, axis=(1,)))
-        self.assertAllClose(
-            knp.sum(x, axis=1, keepdims=True),
-            np.sum(x, axis=1, keepdims=True),
-        )
-        self.assertAllClose(
-            knp.sum(x, axis=None, keepdims=True),
-            np.sum(x, axis=None, keepdims=True),
-        )
-
-        self.assertAllClose(knp.Sum()(x), np.sum(x))
-        self.assertAllClose(knp.Sum(axis=1)(x), np.sum(x, axis=1))
-        self.assertAllClose(
-            knp.Sum(axis=1, keepdims=True)(x),
-            np.sum(x, axis=1, keepdims=True),
-        )
-
-    def test_square(self):
-        x = np.array([[1, 2, 3], [3, 2, 1]])
-        self.assertAllClose(knp.square(x), np.square(x))
-
-        self.assertAllClose(knp.Square()(x), np.square(x))
-
     def test_negative(self):
         x = np.array([[1, 2, 3], [3, 2, 1]])
         self.assertAllClose(knp.negative(x), np.negative(x))
@@ -5816,26 +5628,6 @@ class NumpyOneInputOpsCorrectnessTest(testing.TestCase):
         self.assertAllClose(knp.absolute(x), np.absolute(x))
 
         self.assertAllClose(knp.Absolute()(x), np.absolute(x))
-
-    def test_squeeze(self):
-        x = np.ones([1, 3, 1, 5])
-        self.assertAllClose(knp.squeeze(x), np.squeeze(x))
-        self.assertAllClose(knp.squeeze(x, axis=0), np.squeeze(x, axis=0))
-
-        self.assertAllClose(knp.Squeeze()(x), np.squeeze(x))
-        self.assertAllClose(knp.Squeeze(axis=0)(x), np.squeeze(x, axis=0))
-
-        # Multiple axes
-        x = np.ones([2, 1, 1, 1])
-        self.assertAllClose(knp.squeeze(x, (1, 2)), np.squeeze(x, (1, 2)))
-        self.assertAllClose(knp.squeeze(x, (-1, -2)), np.squeeze(x, (-1, -2)))
-        self.assertAllClose(knp.squeeze(x, (1, 2, 3)), np.squeeze(x, (1, 2, 3)))
-        self.assertAllClose(knp.squeeze(x, (-1, 1)), np.squeeze(x, (-1, 1)))
-
-        self.assertAllClose(knp.Squeeze((1, 2))(x), np.squeeze(x, (1, 2)))
-        self.assertAllClose(knp.Squeeze((-1, -2))(x), np.squeeze(x, (-1, -2)))
-        self.assertAllClose(knp.Squeeze((1, 2, 3))(x), np.squeeze(x, (1, 2, 3)))
-        self.assertAllClose(knp.Squeeze((-1, 1))(x), np.squeeze(x, (-1, 1)))
 
     def test_transpose(self):
         x = np.ones([1, 2, 3, 4, 5])
@@ -6241,17 +6033,6 @@ class NumpyOneInputOpsCorrectnessTest(testing.TestCase):
             knp.BroadcastTo([2, 2, 3])(x),
             np.broadcast_to(x, [2, 2, 3]),
         )
-
-    def test_cbrt(self):
-        x = np.array([[-8, -1, 0], [1, 8, 27]], dtype="float32")
-        ref_y = np.sign(x) * np.abs(x) ** (1.0 / 3.0)
-        y = knp.cbrt(x)
-        self.assertEqual(standardize_dtype(y.dtype), "float32")
-        self.assertAllClose(y, ref_y)
-
-        y = knp.Cbrt()(x)
-        self.assertEqual(standardize_dtype(y.dtype), "float32")
-        self.assertAllClose(y, ref_y)
 
     def test_ceil(self):
         x = np.array([[1.2, 2.1, -2.5], [2.4, -11.9, -5.5]])
@@ -9606,28 +9387,6 @@ class NumpyDtypeTest(testing.TestCase):
     )
 
     @parameterized.named_parameters(
-        named_product(dtypes=itertools.combinations(BINARY_DTYPES, 2))
-    )
-    def test_add(self, dtypes):
-        import jax.numpy as jnp
-
-        dtype1, dtype2 = dtypes
-        x1 = knp.ones((1,), dtype=dtype1)
-        x2 = knp.ones((1,), dtype=dtype2)
-        x1_jax = jnp.ones((1,), dtype=dtype1)
-        x2_jax = jnp.ones((1,), dtype=dtype2)
-        expected_dtype = standardize_dtype(jnp.add(x1_jax, x2_jax).dtype)
-
-        self.assertEqual(
-            standardize_dtype(knp.add(x1, x2).dtype),
-            expected_dtype,
-        )
-        self.assertEqual(
-            standardize_dtype(knp.Add().symbolic_call(x1, x2).dtype),
-            expected_dtype,
-        )
-
-    @parameterized.named_parameters(
         named_product(BACKEND_AGNOSTIC_OPS, dtype=ALL_DTYPES)
     )
     def test_array_split(self, backend_agnostic_ops, dtype):
@@ -9645,25 +9404,6 @@ class NumpyDtypeTest(testing.TestCase):
             standardize_dtype(knp.array_split(x, 2, -1)[0].dtype),
             expected_dtype,
         )
-
-    @parameterized.named_parameters(named_product(dtype=ALL_DTYPES))
-    def test_add_python_types(self, dtype):
-        import jax.numpy as jnp
-
-        x = knp.ones((1,), dtype=dtype)
-        x_jax = jnp.ones((1,), dtype=dtype)
-
-        # python int
-        expected_dtype = standardize_dtype(jnp.add(x_jax, 1).dtype)
-
-        self.assertDType(knp.add(x, 1), expected_dtype)
-        self.assertDType(knp.Add().symbolic_call(x, 1), expected_dtype)
-
-        # python float
-        expected_dtype = standardize_dtype(jnp.add(x_jax, 1.0).dtype)
-
-        self.assertDType(knp.add(x, 1.0), expected_dtype)
-        self.assertDType(knp.Add().symbolic_call(x, 1.0), expected_dtype)
 
     @parameterized.named_parameters(named_product(dtype=ALL_DTYPES))
     def test_bartlett(self, dtype):
@@ -10434,20 +10174,6 @@ class NumpyDtypeTest(testing.TestCase):
         )
         self.assertEqual(
             standardize_dtype(knp.BroadcastTo((3, 3)).symbolic_call(x).dtype),
-            expected_dtype,
-        )
-
-    @parameterized.named_parameters(named_product(dtype=ALL_DTYPES))
-    def test_cbrt(self, dtype):
-        import jax.numpy as jnp
-
-        x1 = knp.ones((1,), dtype=dtype)
-        x1_jax = jnp.ones((1,), dtype=dtype)
-        expected_dtype = standardize_dtype(jnp.cbrt(x1_jax).dtype)
-
-        self.assertEqual(standardize_dtype(knp.cbrt(x1).dtype), expected_dtype)
-        self.assertEqual(
-            standardize_dtype(knp.Cbrt().symbolic_call(x1).dtype),
             expected_dtype,
         )
 
@@ -12799,47 +12525,6 @@ class NumpyDtypeTest(testing.TestCase):
             expected_dtype,
         )
 
-    @parameterized.named_parameters(
-        named_product(dtypes=itertools.combinations(BINARY_DTYPES, 2))
-    )
-    def test_power(self, dtypes):
-        import jax.numpy as jnp
-
-        dtype1, dtype2 = dtypes
-        x = knp.ones((1,), dtype=dtype1)
-        power = knp.ones((1,), dtype2)
-        x_jax = jnp.ones((1,), dtype=dtype1)
-        power_jax = jnp.ones((1,), dtype2)
-        expected_dtype = standardize_dtype(jnp.power(x_jax, power_jax).dtype)
-
-        self.assertEqual(
-            standardize_dtype(knp.power(x, power).dtype),
-            expected_dtype,
-        )
-        self.assertEqual(
-            standardize_dtype(knp.Power().symbolic_call(x, power).dtype),
-            expected_dtype,
-        )
-
-    @parameterized.named_parameters(named_product(dtype=ALL_DTYPES))
-    def test_power_python_types(self, dtype):
-        import jax.numpy as jnp
-
-        x = knp.ones((1,), dtype=dtype)
-        x_jax = jnp.ones((1,), dtype=dtype)
-
-        # python int
-        expected_dtype = standardize_dtype(jnp.power(x_jax, 1).dtype)
-
-        self.assertDType(knp.power(x, 1), expected_dtype)
-        self.assertDType(knp.Power().symbolic_call(x, 1), expected_dtype)
-
-        # python float
-        expected_dtype = standardize_dtype(jnp.power(x_jax, 1.0).dtype)
-
-        self.assertDType(knp.power(x, 1.0), expected_dtype)
-        self.assertDType(knp.Power().symbolic_call(x, 1.0), expected_dtype)
-
     @parameterized.named_parameters(named_product(dtype=ALL_DTYPES))
     def test_prod(self, dtype):
         import jax.numpy as jnp
@@ -13250,40 +12935,6 @@ class NumpyDtypeTest(testing.TestCase):
             expected_dtype,
         )
 
-    @parameterized.named_parameters(named_product(dtype=ALL_DTYPES))
-    def test_square(self, dtype):
-        import jax.numpy as jnp
-
-        x = knp.ones((), dtype=dtype)
-        x_jax = jnp.ones((), dtype=dtype)
-        expected_dtype = standardize_dtype(jnp.square(x_jax).dtype)
-
-        self.assertEqual(
-            standardize_dtype(knp.square(x).dtype),
-            expected_dtype,
-        )
-        self.assertEqual(
-            standardize_dtype(knp.Square().symbolic_call(x).dtype),
-            expected_dtype,
-        )
-
-    @parameterized.named_parameters(named_product(dtype=ALL_DTYPES))
-    def test_squeeze(self, dtype):
-        import jax.numpy as jnp
-
-        x = knp.ones((1, 1), dtype=dtype)
-        x_jax = jnp.ones((1, 1), dtype=dtype)
-        expected_dtype = standardize_dtype(jnp.squeeze(x_jax).dtype)
-
-        self.assertEqual(
-            standardize_dtype(knp.squeeze(x).dtype),
-            expected_dtype,
-        )
-        self.assertEqual(
-            standardize_dtype(knp.Squeeze().symbolic_call(x).dtype),
-            expected_dtype,
-        )
-
     @parameterized.named_parameters(
         named_product(dtypes=itertools.combinations(ALL_DTYPES, 2))
     )
@@ -13343,24 +12994,6 @@ class NumpyDtypeTest(testing.TestCase):
         self.assertEqual(model.output.dtype, str(expected.dtype))
         self.assertEqual(standardize_dtype(actual.dtype), str(expected.dtype))
         self.assertAllClose(actual, expected)
-
-    @parameterized.named_parameters(named_product(dtype=ALL_DTYPES))
-    def test_sum(self, dtype):
-        import jax.numpy as jnp
-
-        x = knp.ones((1,), dtype=dtype)
-        x_jax = jnp.ones((1,), dtype=dtype)
-        expected_dtype = standardize_dtype(jnp.sum(x_jax).dtype)
-
-        # TODO: torch doesn't support uint32
-        if backend.backend() == "torch" and expected_dtype == "uint32":
-            expected_dtype = "int32"
-
-        self.assertEqual(standardize_dtype(knp.sum(x).dtype), expected_dtype)
-        self.assertEqual(
-            standardize_dtype(knp.Sum().symbolic_call(x).dtype),
-            expected_dtype,
-        )
 
     @parameterized.named_parameters(named_product(dtype=ALL_DTYPES))
     def test_swapaxes(self, dtype):
@@ -14055,3 +13688,151 @@ class RepeatTest(testing.TestCase):
         model = keras.Model(inputs, RepeatRows()(inputs))
 
         self.assertAllClose(model.predict(x), expected)
+
+
+class SquareTest(testing.UnaryOpTest):
+    op, op_class = knp.square, knp.Square
+    reference_fn, jax_fn = np.square, jnp.square
+
+
+class CbrtTest(testing.UnaryOpTest):
+    op, op_class = knp.cbrt, knp.Cbrt
+    reference_fn, jax_fn = np.cbrt, jnp.cbrt
+    cases = {  # The first case feeds the dtype tests: non-negative.
+        "standard": ((X,), {}),
+        "negative": ((np.array([[-8, -1, 0], [1, 8, 27]], "float32"),), {}),
+    }
+
+
+class AddTest(testing.BinaryOpTest):
+    op, op_class = knp.add, knp.Add
+    reference_fn, jax_fn = np.add, jnp.add
+
+    @pytest.mark.skipif(
+        backend.backend() == "tensorflow",
+        reason="TODO: `tf.add` has no bool kernel.",
+    )
+    def test_input_dtypes_bool_bool(self):
+        self.check_input_dtypes(("bool", "bool"))
+
+    def test_incompatible_shapes(self):
+        with self.assertRaises(ValueError):
+            knp.add(KerasTensor((2, 3)), KerasTensor((2, 3, 4)))
+
+    @pytest.mark.skipif(
+        not backend.SUPPORTS_RAGGED_TENSORS,
+        reason="Backend does not support ragged tensors.",
+    )
+    def test_ragged(self):
+        if backend.backend() == "tensorflow":
+            import tensorflow as tf
+
+            x = tf.ragged.constant(
+                [[[1, 2], [3, 4]], [[5, 6]]], ragged_rank=1, dtype="float32"
+            )
+            x_mask = x.with_values(tf.ones_like(x.flat_values))
+
+        x_np = backend.ops.convert_to_numpy(x)
+        x_mask_np = backend.ops.convert_to_numpy(x_mask)
+        y = np.ones((2, 1, 1), dtype="float32")
+        z = np.ones((2,), dtype="float32")
+
+        # ragged + ragged
+        self.assertAllClose(knp.add(x, x), np.add(x_np, x_np))
+        # ragged + dense
+        self.assertAllClose(knp.add(x, y), np.add(x_np, y) * x_mask_np)
+        # ragged + dense with broadcast
+        self.assertAllClose(knp.add(x, z), np.add(x_np, z) * x_mask_np)
+        # dense + ragged
+        self.assertAllClose(knp.add(y, x), np.add(y, x_np) * x_mask_np)
+        # dense + ragged with broadcast
+        self.assertAllClose(knp.add(z, x), np.add(z, x_np) * x_mask_np)
+
+    @pytest.mark.skipif(
+        backend.backend() != "tensorflow",
+        reason="Backend does not support strings.",
+    )
+    def test_strings(self):
+        import tensorflow as tf
+
+        x1 = tf.constant(["hello", "world"])
+        x2 = tf.constant(["foo", "bar"])
+
+        self.assertAllEqual(
+            knp.add(x1, x2),
+            np.add(
+                backend.ops.convert_to_numpy(x1),
+                backend.ops.convert_to_numpy(x2),
+            ),
+        )
+
+
+class PowerTest(testing.BinaryOpTest):
+    op, op_class = knp.power, knp.Power
+    reference_fn, jax_fn = np.power, jnp.power
+
+    # Base and exponent play different roles: test every order.
+    @parameterized.named_parameters(named_dtype_combinations(2, ordered=True))
+    def test_input_dtypes(self, dtypes):
+        if dtypes == ("bool", "bool"):
+            self.skipTest(
+                "TODO: eager output is int8 (numpy) or int32 (jax) while the "
+                "symbolic output is bool; tensorflow and torch have no bool "
+                "kernel."
+            )
+        self.check_input_dtypes(dtypes)
+
+    def test_incompatible_shapes(self):
+        with self.assertRaises(ValueError):
+            knp.power(KerasTensor((2, 3)), KerasTensor((2, 3, 4)))
+
+
+class SumTest(testing.ReductionOpTest):
+    op, op_class = knp.sum, knp.Sum
+    reference_fn, jax_fn = np.sum, jnp.sum
+
+    @pytest.mark.skipif(
+        backend.backend() == "torch",
+        reason="`Sum.compute_output_spec` returns int32 on torch, which has no "
+        "uint32; JAX returns uint32.",
+    )
+    def test_input_dtypes_uint8(self):
+        self.check_input_dtypes(("uint8",))
+
+
+class SqueezeTest(testing.UnaryOpTest):
+    op, op_class = knp.squeeze, knp.Squeeze
+    reference_fn, jax_fn = np.squeeze, jnp.squeeze
+    # With unknown dimensions, the op can't tell which axes have size 1.
+    run_dynamic_shape_checks = False
+    cases = {
+        name: ((np.ones(shape),), kwargs)
+        for name, shape, kwargs in (
+            ("no_op", [2, 3], {}),
+            ("all", [1, 3, 1, 5], {}),
+            ("axis", [1, 3, 1, 5], {"axis": 0}),
+            ("middle", [2, 1, 3], {}),
+            ("middle_axis", [2, 1, 3], {"axis": 1}),
+            ("negative_axis", [2, 1, 3], {"axis": -2}),
+            ("axes", [2, 1, 1, 1], {"axis": (1, 2)}),
+            ("negative_axes", [2, 1, 1, 1], {"axis": (-1, -2)}),
+            ("all_axes", [2, 1, 1, 1], {"axis": (1, 2, 3)}),
+            ("mixed_axes", [2, 1, 1, 1], {"axis": (-1, 1)}),
+        )
+    }
+
+    def test_dynamic_shape_inference(self):
+        x = KerasTensor((None, 1))
+        self.assertEqual(knp.squeeze(x).shape, (None,))
+        self.assertEqual(knp.squeeze(x, axis=1).shape, (None,))
+        x = KerasTensor((None, 1, 1, 1))
+        self.assertEqual(knp.squeeze(x, (1, 2)).shape, (None, 1))
+        self.assertEqual(knp.squeeze(x, (-1, -2)).shape, (None, 1))
+        self.assertEqual(knp.squeeze(x, (1, 2, 3)).shape, (None,))
+        self.assertEqual(knp.squeeze(x, (-1, 1)).shape, (None, 1))
+
+    def test_invalid_axis(self):
+        with self.assertRaises(ValueError):
+            knp.squeeze(KerasTensor((None, 1)), axis=0)
+        with self.assertRaises(ValueError):
+            knp.squeeze(KerasTensor((2, 1, 3)), axis=0)
