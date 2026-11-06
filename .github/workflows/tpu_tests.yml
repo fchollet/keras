@@ -49,7 +49,23 @@ jobs:
           - backend: jax
             multi_device: false
             runner: linux-x86-ct6e-44-1tpu
-            name: Run tests on TPU
+            name: Run tests on TPU (shard 1)
+            shard: 1
+          - backend: jax
+            multi_device: false
+            runner: linux-x86-ct6e-44-1tpu
+            name: Run tests on TPU (shard 2)
+            shard: 2
+          - backend: jax
+            multi_device: false
+            runner: linux-x86-ct6e-44-1tpu
+            name: Run tests on TPU (shard 3)
+            shard: 3
+          - backend: jax
+            multi_device: false
+            runner: linux-x86-ct6e-44-1tpu
+            name: Run tests on TPU (shard 4)
+            shard: 4
           - backend: jax
             multi_device: true
             runner: linux-x86-ct5lp-112-4tpu
@@ -87,7 +103,15 @@ jobs:
 
       - name: Run Tests
         if: ${{ !matrix.multi_device }}
-        run: pytest keras --ignore keras/src/applications --cov=keras --cov-config=pyproject.toml
+        id: pytest
+        run: |
+          mkdir -p .github/test_durations/tpu
+          pytest keras --ignore keras/src/applications --cov=keras \
+            --cov-config=pyproject.toml --splits 4 \
+            --group ${{ matrix.shard }} \
+            --durations-path .github/test_durations/tpu/${{ matrix.backend }}.json \
+            --splitting-algorithm duration_based_chunks \
+            --store-durations --clean-durations
 
       - name: Run Multi-device Tests
         if: ${{ matrix.multi_device }}
@@ -104,3 +128,19 @@ jobs:
           files: core-coverage.xml
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
+
+      # Each shard rewrites .github/test_durations/tpu/<backend>.json with its
+      # own fresh timings; master runs upload them so the committed files can be
+      # refreshed with .github/workflows/scripts/merge_test_durations.py. Upload
+      # only when pytest ran: a failed test still gives valid durations, but a
+      # failed install would upload the committed file as if it were fresh.
+      - name: Upload test durations
+        if: |
+          always() && github.event_name == 'push' && !matrix.multi_device &&
+          (steps.pytest.outcome == 'success' || steps.pytest.outcome == 'failure')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: durations-tpu-${{ matrix.backend }}-${{ matrix.shard }}
+          path: .github/test_durations/tpu/${{ matrix.backend }}.json
+          if-no-files-found: ignore
+          retention-days: 14
