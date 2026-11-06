@@ -4,6 +4,7 @@ import math
 import jax
 import jax.experimental.sparse as jax_sparse
 import jax.numpy as jnp
+import numpy as np
 from jax import export as jax_export
 
 from keras.src.backend import config
@@ -1299,6 +1300,10 @@ def reciprocal(x):
 
 def repeat(x, repeats, axis=None):
     x = convert_to_tensor(x)
+    if isinstance(repeats, (list, tuple)):
+        # jnp.repeat rejects Python sequences. A NumPy array keeps the counts
+        # concrete, so the output shape is still static under jit.
+        repeats = np.asarray(repeats)
     return jnp.repeat(x, repeats, axis=axis)
 
 

@@ -7131,6 +7131,15 @@ class NumpyOneInputOpsCorrectnessTest(testing.TestCase):
             knp.repeat(x, np.array([1, 2]), axis=-1),
             np.repeat(x, np.array([1, 2]), axis=-1),
         )
+        self.assertAllClose(
+            knp.repeat(x, [1, 2], axis=0), np.repeat(x, [1, 2], axis=0)
+        )
+        self.assertAllClose(
+            knp.repeat(x, (2, 1), axis=1), np.repeat(x, (2, 1), axis=1)
+        )
+        self.assertAllClose(
+            knp.repeat(x, [1, 2, 0, 1]), np.repeat(x, [1, 2, 0, 1])
+        )
         self.assertAllClose(knp.Repeat(2)(x), np.repeat(x, 2))
         self.assertAllClose(knp.Repeat(3, axis=1)(x), np.repeat(x, 3, axis=1))
         self.assertAllClose(
