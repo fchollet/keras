@@ -2062,6 +2062,11 @@ class ImageOpsCorrectnessTest(testing.TestCase):
         ("zero_both", (0, 0)),
         ("negative_height", (-1, 10)),
         ("negative_width", (10, -1)),
+        ("numpy_int_zero_height", (np.int64(0), 10)),
+        ("numpy_int_zero_width", (10, np.int32(0))),
+        ("numpy_int_negative_height", (np.int32(-1), 10)),
+        ("numpy_int_negative_width", (10, np.int64(-1))),
+        ("numpy_int_both_zero", (np.int64(0), np.int64(0))),
     )
     def test_resize_invalid_size_zero_or_negative(self, invalid_size):
         """Resize rejects zero or negative height/width."""
