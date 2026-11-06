@@ -67,15 +67,34 @@ def load_data():
     dirname = os.path.join("datasets", "fashion-mnist")
     base = "https://storage.googleapis.com/tensorflow/tf-keras-datasets/"
     files = [
-        "train-labels-idx1-ubyte.gz",
-        "train-images-idx3-ubyte.gz",
-        "t10k-labels-idx1-ubyte.gz",
-        "t10k-images-idx3-ubyte.gz",
+        (
+            "train-labels-idx1-ubyte.gz",
+            "a04f17134ac03560a47e3764e11b92fc97de4d1bfaf8ba1a3aa29af54cc90845",
+        ),
+        (
+            "train-images-idx3-ubyte.gz",
+            "3aede38d61863908ad78613f6a32ed271626dd12800ba2636569512369268a84",
+        ),
+        (
+            "t10k-labels-idx1-ubyte.gz",
+            "67da17c76eaffca5446c3361aaab5c3cd6d1c2608764d35dfb1850b086bf8dd5",
+        ),
+        (
+            "t10k-images-idx3-ubyte.gz",
+            "346e55b948d973a97e58d2351dde16a484bd415d4595297633bb08f03db6a073",
+        ),
     ]
 
     paths = []
-    for fname in files:
-        paths.append(get_file(fname, origin=base + fname, cache_subdir=dirname))
+    for fname, file_hash in files:
+        paths.append(
+            get_file(
+                fname,
+                origin=base + fname,
+                cache_subdir=dirname,
+                file_hash=file_hash,
+            )
+        )
 
     with gzip.open(paths[0], "rb") as lbpath:
         y_train = np.frombuffer(lbpath.read(), np.uint8, offset=8)
