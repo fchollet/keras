@@ -3458,6 +3458,46 @@ class NumpyOneInputOpsStaticShapeTest(testing.TestCase):
         self.assertEqual(idx1.shape, (6,))
 
 
+# The int8 `einsum` equations of the `EinsumDense` layers of Gemma, Llama and
+# `MultiHeadAttention`, the 2-D form `ab,bc->ac` of `EinsumDense` and a rank-1
+# input `d,df->f`, as `(name, equation, x_shape, kernel_shape)` with one row.
+INT8_EINSUM_ONE_ROW = [
+    ("btd_ndh_one_row", "btd,ndh->btnh", (1, 1, 256), (4, 256, 32)),
+    ("btnh_nhd_one_row", "btnh,nhd->btd", (1, 1, 4, 32), (4, 32, 256)),
+    ("btd_df_one_row", "btd,df->btf", (1, 1, 256), (256, 256)),
+    ("bqm_muh_one_row", "bqm,muh->bquh", (1, 1, 256), (256, 4, 32)),
+    ("bquh_uhm_one_row", "bquh,uhm->bqm", (1, 1, 4, 32), (4, 32, 256)),
+    ("abc_cde_one_row", "abc,cde->abde", (1, 1, 256), (256, 4, 32)),
+    ("abcd_cde_one_row", "abcd,cde->abe", (1, 1, 4, 32), (4, 32, 256)),
+    ("ab_bc_one_row", "ab,bc->ac", (1, 256), (256, 256)),
+    ("d_df_one_row", "d,df->f", (256,), (256, 256)),
+]
+# The same equations with two rows. The first axis of `x` holds the rows,
+# except for `d,df->f`, which has none.
+INT8_EINSUM_TWO_ROWS = [
+    (name.replace("one_row", "two_rows"), equation, (2,) + x_shape[1:], kernel)
+    for name, equation, x_shape, kernel in INT8_EINSUM_ONE_ROW
+    if len(x_shape) > 1
+]
+
+
+def int8_einsum_operands(x_shape, kernel_shape):
+    """Returns the `(x, kernel)` pairs of random and of extreme values."""
+    rng = np.random.default_rng(0)
+    random = (
+        rng.integers(-128, 128, size=x_shape, dtype="int8"),
+        rng.integers(-128, 128, size=kernel_shape, dtype="int8"),
+    )
+    # The largest positive and the most negative sums. The last axis of each
+    # kernel is an output axis.
+    kernel = np.where(np.arange(kernel_shape[-1]) % 2 == 0, -128, 127)
+    extreme = (
+        np.full(x_shape, -128, dtype="int8"),
+        np.broadcast_to(kernel, kernel_shape).astype("int8"),
+    )
+    return [random, extreme]
+
+
 class NumpyTwoInputOpsCorrectnessTest(testing.TestCase):
     def test_heaviside(self):
         x = np.array([[1, 2, 3], [3, 2, 1]])
@@ -3650,6 +3690,64 @@ class NumpyTwoInputOpsCorrectnessTest(testing.TestCase):
             tpu_rtol=tpu_atol,
         )
         self.assertSparse(knp.matmul(x, y), x_sparse and y_sparse)
+
+    @parameterized.named_parameters(
+        named_product(
+            (
+                {"testcase_name": "rank1", "x_shape": (64,)},
+                {"testcase_name": "one_row", "x_shape": (1, 64)},
+                {"testcase_name": "two_rows", "x_shape": (2, 64)},
+                {"testcase_name": "one_row_rank3", "x_shape": (1, 1, 64)},
+                {"testcase_name": "three_rows_rank3", "x_shape": (3, 1, 64)},
+                {"testcase_name": "one_row_k16384", "x_shape": (1, 16384)},
+            ),
+            values=["random", "extreme"],
+        )
+    )
+    def test_matmul_int8(self, x_shape, values):
+        if backend.backend() == "tensorflow" and len(x_shape) == 1:
+            pytest.skip("TensorFlow returns int8 for a rank-1 int8 `matmul`")
+        y_shape = (x_shape[-1], 256)
+        if values == "random":
+            rng = np.random.default_rng(0)
+            x = rng.integers(-128, 128, size=x_shape, dtype="int8")
+            y = rng.integers(-128, 128, size=y_shape, dtype="int8")
+        else:
+            # The largest positive and the most negative sums.
+            x = np.full(x_shape, -128, dtype="int8")
+            y = np.where(np.arange(256) % 2 == 0, -128, 127)
+            y = np.broadcast_to(y, y_shape).astype("int8")
+        expected = np.matmul(x.astype("int64"), y.astype("int64"))
+
+        outputs = knp.matmul(x, y)
+        self.assertEqual(standardize_dtype(outputs.dtype), "int32")
+        self.assertAllEqual(outputs, expected)
+
+    def assertInt8Einsum(self, outputs, equation, x, kernel):
+        """Checks `outputs` bit for bit against NumPy in int64."""
+        expected = np.einsum(
+            equation, x.astype("int64"), kernel.astype("int64")
+        )
+        self.assertEqual(standardize_dtype(outputs.dtype), "int32")
+        self.assertAllEqual(outputs, expected)
+
+    @parameterized.named_parameters(INT8_EINSUM_ONE_ROW + INT8_EINSUM_TWO_ROWS)
+    def test_einsum_int8(self, equation, x_shape, kernel_shape):
+        for x, kernel in int8_einsum_operands(x_shape, kernel_shape):
+            outputs = knp.einsum(equation, x, kernel)
+            self.assertInt8Einsum(outputs, equation, x, kernel)
+
+    # Forms that the JAX CPU pad of a one-row int8 `einsum` does not apply to.
+    @parameterized.named_parameters(
+        ("batch", "bij,bjk->bik", (1, 1, 256), (1, 256, 64)),
+        ("transposed_output", "ab,bc->ca", (1, 256), (256, 256)),
+        ("summed_by_x1", "abc,cd->ad", (1, 1, 256), (256, 256)),
+        ("ellipsis", "...d,df->...f", (1, 1, 256), (256, 256)),
+    )
+    def test_einsum_int8_unpadded_forms(self, equation, x_shape, kernel_shape):
+        for x, kernel in int8_einsum_operands(x_shape, kernel_shape):
+            outputs = knp.einsum(equation, x, kernel)
+            self.assertInt8Einsum(outputs, equation, x, kernel)
 
     @parameterized.named_parameters(named_product(BACKEND_AGNOSTIC_OPS))
     def test_float_power(self, backend_agnostic_ops):

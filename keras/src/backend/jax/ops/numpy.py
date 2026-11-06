@@ -1,5 +1,7 @@
 import builtins
 import math
+import re
+import string
 
 import jax
 import jax.experimental.sparse as jax_sparse
@@ -131,6 +133,60 @@ def bincount(x, weights=None, minlength=0, sparse=False):
     return jnp.bincount(x, weights=weights, minlength=minlength)
 
 
+def _one_row_int8_einsum_subscripts(subscripts, x1, x2):
+    """Returns the subscripts of a one-row int8 `einsum` padded to two rows.
+
+    A one-row `einsum` is a `dot_general` of `x1` with `x2`. Each label of
+    `x1` is contracted with `x2` or is a free label of size 1, and the output
+    is the free labels of `x1` and then those of `x2`. The subscripts add two
+    leading labels, of sizes 1 and 2, to `x1` and to the output. They name
+    the labels of `x2` first, in the axis order of `x2`, and then the other
+    labels of `x1`. `jnp.einsum` sorts the contracted labels, and a sorted
+    order that differs from the axis order of `x2` makes XLA write a
+    transposed int8 copy of `x2`. Returns `None` for any other `einsum`.
+    """
+    if not isinstance(subscripts, str):
+        return None
+    match = re.fullmatch(
+        r"([a-zA-Z]+),([a-zA-Z]+)->([a-zA-Z]*)", subscripts.replace(" ", "")
+    )
+    if match is None:
+        return None
+    lhs, rhs, output = match.groups()
+    names = dict(zip(dict.fromkeys(rhs + lhs), string.ascii_letters))
+    if (
+        set(lhs).isdisjoint(rhs)
+        or len(set(lhs)) < len(lhs)
+        or len(set(rhs)) < len(rhs)
+        or len(lhs) != x1.ndim
+        or len(rhs) != x2.ndim
+        or len(names) > len(string.ascii_letters) - 2
+    ):
+        return None
+    free1 = "".join(c for c in lhs if c not in rhs)
+    free2 = "".join(c for c in rhs if c not in lhs)
+    # With this output, `jnp.einsum` adds no transpose after the dot. A
+    # transpose after a two-row int8 dot can give wrong values on XLA CPU for
+    # jax 0.9.1 to 0.11.2.
+    if output != free1 + free2:
+        return None
+    sizes2 = dict(zip(rhs, x2.shape))
+    for label, size in zip(lhs, x1.shape):
+        # A symbolic size, as in `jax.export`, keeps the unpadded `einsum`.
+        if label in free1 and not (isinstance(size, int) and size == 1):
+            return None
+        # A contracted size that differs keeps the unpadded `einsum`, so its
+        # error names the subscripts of the user.
+        if label not in free1 and size != sizes2[label]:
+            return None
+    new = string.ascii_letters[len(names) : len(names) + 2]
+    table = str.maketrans(names)
+    return (
+        f"{new}{lhs.translate(table)},{rhs.translate(table)}"
+        f"->{new}{output.translate(table)}"
+    )
+
+
 def einsum(subscripts, *operands, **kwargs):
     operands = [convert_to_tensor(x) for x in operands]
     # When all operands are of int8, specifying `preferred_element_type` as
@@ -141,6 +197,22 @@ def einsum(subscripts, *operands, **kwargs):
     else:
         preferred_element_type = None
     kwargs["preferred_element_type"] = preferred_element_type
+    if (
+        preferred_element_type == "int32"
+        and len(operands) == 2
+        and kwargs.get("out_sharding") is None
+        and _uses_cpu(operands[0])
+    ):
+        x1, x2 = operands
+        padded = _one_row_int8_einsum_subscripts(subscripts, x1, x2)
+        if padded is not None:
+            # XLA CPU runs a one-row int8 dot as an int32 dot on an int32 copy
+            # of `x2`. Two rows keep the int8 dot, so pad `x1` to two rows and
+            # keep the first row of the result. The padded `x1` has rank 3 or
+            # more: with a rank-2 `x1`, a transposed `x2` also gets the int32
+            # dot.
+            x1 = jnp.pad(x1[None, None], ((0, 0), (0, 1)) + ((0, 0),) * x1.ndim)
+            return jnp.einsum(padded, x1, x2, **kwargs)[0, 0]
     return jnp.einsum(subscripts, *operands, **kwargs)
 
 
@@ -179,6 +251,23 @@ def matmul(x1, x2):
             x1, x2, preferred_element_type=preferred_element_type
         )
 
+    if (
+        preferred_element_type == "int32"
+        and x1.ndim >= 1
+        and x2.ndim == 2
+        and math.prod(x1.shape[:-1]) == 1
+        and _uses_cpu(x1)
+    ):
+        # XLA CPU runs a one-row int8 dot as an int32 dot on an int32 copy
+        # of `x2`. Two rows keep the int8 dot, so pad `x1` to two rows and
+        # keep the first row of the result. The padded `x1` is rank 3: with
+        # a rank-2 `x1`, a transposed `x2` also gets the int32 dot.
+        outputs = jnp.matmul(
+            jnp.pad(jnp.reshape(x1, (1, 1, -1)), ((0, 0), (0, 1), (0, 0))),
+            x2,
+            preferred_element_type=preferred_element_type,
+        )
+        return jnp.reshape(outputs[:, :1], x1.shape[:-1] + x2.shape[-1:])
     return jnp.matmul(x1, x2, preferred_element_type=preferred_element_type)
 
 
