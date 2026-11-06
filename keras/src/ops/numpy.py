@@ -3481,7 +3481,7 @@ def exp(x):
 
 class Exp2(Operation):
     def call(self, x):
-        return backend.ops.numpy.exp2(x)
+        return _exp2(x)
 
     def compute_output_spec(self, x):
         dtype = standardize_dtype(x.dtype)
@@ -3502,7 +3502,19 @@ def exp2(x):
     """
     if any_symbolic_tensors((x,)):
         return Exp2().symbolic_call(x)
-    return backend.ops.numpy.exp2(x)
+    return _exp2(x)
+
+
+def _exp2(x):
+    if not config._use_backend_agnostic_ops() and hasattr(
+        backend.ops.numpy, "exp2"
+    ):
+        return backend.ops.numpy.exp2(x)
+    x = backend.ops.convert_to_tensor(x)
+    dtype = standardize_dtype(x.dtype)
+    if "int" in dtype or dtype == "bool":
+        x = backend.ops.cast(x, config.floatx())
+    return backend.ops.numpy.power(2.0, x)
 
 
 class ExpandDims(Operation):

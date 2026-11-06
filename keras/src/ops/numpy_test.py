@@ -6473,7 +6473,10 @@ class NumpyOneInputOpsCorrectnessTest(testing.TestCase):
         self.assertAllClose(knp.exp(x), np.exp(x))
         self.assertAllClose(knp.Exp()(x), np.exp(x))
 
-    def test_exp2(self):
+    @parameterized.named_parameters(named_product(BACKEND_AGNOSTIC_OPS))
+    def test_exp2(self, backend_agnostic_ops):
+        backend.config._set_use_backend_agnostic_ops(backend_agnostic_ops)
+        self.addCleanup(backend.config._set_use_backend_agnostic_ops, False)
         x = np.array([[1, 2, 3], [3, 2, 1]])
         self.assertAllClose(knp.exp2(x), np.exp2(x))
         self.assertAllClose(knp.Exp2()(x), np.exp2(x))
@@ -10853,9 +10856,14 @@ class NumpyDtypeTest(testing.TestCase):
             standardize_dtype(knp.Exp().symbolic_call(x).dtype), expected_dtype
         )
 
-    @parameterized.named_parameters(named_product(dtype=ALL_DTYPES))
-    def test_exp2(self, dtype):
+    @parameterized.named_parameters(
+        named_product(BACKEND_AGNOSTIC_OPS, dtype=ALL_DTYPES)
+    )
+    def test_exp2(self, backend_agnostic_ops, dtype):
         import jax.numpy as jnp
+
+        backend.config._set_use_backend_agnostic_ops(backend_agnostic_ops)
+        self.addCleanup(backend.config._set_use_backend_agnostic_ops, False)
 
         x = knp.ones((1,), dtype=dtype)
         x_jax = jnp.ones((1,), dtype=dtype)
