@@ -20,8 +20,6 @@ from keras.src.backend.common.backend_utils import (
 from keras.src.backend.torch.ops.core import cast
 from keras.src.backend.torch.ops.core import convert_to_tensor
 from keras.src.backend.torch.ops.core import get_device
-from keras.src.backend.torch.ops.numpy import expand_dims
-from keras.src.backend.torch.ops.numpy import where
 from keras.src.utils.argument_validation import standardize_tuple
 
 
@@ -921,12 +919,12 @@ def one_hot(x, num_classes, axis=-1, dtype=None, sparse=False):
     x = convert_to_tensor(x, dtype=torch.long)
     zero = convert_to_tensor(0, dtype=torch.long)
 
-    # Torch one_hot does not natively handle negative values, so we add some
-    # manual handling for negatives in the input to one_hot by using max(x, 0).
-    # The output will have some invalid results, so we set them back to 0 using
-    # `where` afterwards.
-    output = tnn.one_hot(torch.clamp(x, min=0), num_classes)
-    output = where(expand_dims(x, axis=-1) >= 0, output, zero)
+    # Torch one_hot does not natively handle negative or out of range values,
+    # so we clamp the input to `[0, num_classes - 1]`. The output will have
+    # some invalid results, so we set them back to 0 using `where` afterwards.
+    valid = ((x >= 0) & (x < num_classes)).unsqueeze(-1)
+    output = tnn.one_hot(torch.clamp(x, 0, num_classes - 1), num_classes)
+    output = torch.where(valid, output, zero)
     output = convert_to_tensor(output, dtype=dtype)
     dims = output.dim()
     axis = canonicalize_axis(axis, dims)

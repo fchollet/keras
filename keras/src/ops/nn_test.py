@@ -2546,6 +2546,23 @@ class NNOpsCorrectnessTest(testing.TestCase):
         )
         self.assertSparse(output_1d, sparse)
 
+        # Test 1D one-hot with out-of-range inputs
+        indices_1d = np.array([0, 4, 7, 3])
+        output_1d = knn.one_hot(indices_1d, 4, sparse=sparse)
+        self.assertAllClose(
+            output_1d,
+            np.array(
+                [
+                    [1, 0, 0, 0],
+                    [0, 0, 0, 0],
+                    [0, 0, 0, 0],
+                    [0, 0, 0, 1],
+                ],
+                dtype=np.float32,
+            ),
+        )
+        self.assertSparse(output_1d, sparse)
+
     def test_binary_crossentropy(self):
         # Test with from_logits=False
         target = np.array([[0.1], [0.9], [0.2], [1.0]])
@@ -2733,6 +2750,13 @@ class NNOpsCorrectnessTest(testing.TestCase):
 
         # Test 1D multi-hot with negative inputs
         indices_1d = np.array([0, -1, -1, 3])
+        expected_output_1d = np.array([1, 0, 0, 1])
+        output_1d = knn.multi_hot(indices_1d, 4, sparse=sparse)
+        self.assertAllClose(output_1d, expected_output_1d)
+        self.assertSparse(output_1d, sparse)
+
+        # Test 1D multi-hot with out-of-range inputs
+        indices_1d = np.array([0, 4, 7, 3])
         expected_output_1d = np.array([1, 0, 0, 1])
         output_1d = knn.multi_hot(indices_1d, 4, sparse=sparse)
         self.assertAllClose(output_1d, expected_output_1d)
