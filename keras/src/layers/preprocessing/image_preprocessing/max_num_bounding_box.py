@@ -111,5 +111,10 @@ class MaxNumBoundingBoxes(BaseImagePreprocessingLayer):
 
     def get_config(self):
         config = super().get_config()
-        config.update({"max_number": self.max_number})
+        config.update(
+            {
+                "max_number": self.max_number,
+                "fill_value": self.fill_value,
+            }
+        )
         return config

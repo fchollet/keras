@@ -1,15 +1,23 @@
 """Tests for PyTorch backend core utilities."""
 
+import concurrent.futures
+import threading
+
 import numpy as np
 import pytest
 import torch
 from absl.testing import parameterized
+from torch._dynamo.testing import CompileCounter
 from torch.distributed.device_mesh import DeviceMesh as TorchDeviceMesh
 from torch.distributed.tensor import DTensor
 from torch.distributed.tensor import Replicate
 
 from keras.src import backend
+from keras.src import layers
+from keras.src import ops
 from keras.src import testing
+from keras.src.backend.common import standardize_dtype
+from keras.src.backend.common.global_state import clear_session
 from keras.src.backend.torch import distribution_lib
 from keras.src.backend.torch.distributed_test_utils import (
     TorchDistributedTestMixin,
@@ -20,6 +28,7 @@ from keras.src.backend.torch.ops.core import Variable
 from keras.src.backend.torch.ops.core import convert_to_tensor
 from keras.src.backend.torch.ops.core import get_device
 from keras.src.backend.torch.ops.core import slice as torch_slice
+from keras.src.distribution.distribution_lib import DataParallel
 from keras.src.distribution.distribution_lib import DeviceMesh
 from keras.src.distribution.distribution_lib import LayoutMap
 from keras.src.distribution.distribution_lib import ModelParallel
@@ -113,6 +122,65 @@ class TorchCoreTest(testing.TestCase):
             dtype="float32",
         )
 
+    def _get_other_device(self):
+        """Returns a device type that is not the type of `get_device()`."""
+        keras_device = get_device().split(":")[0]
+        devices = ["cpu"]
+        if torch.cuda.is_available():
+            devices.append("cuda")
+        if torch.backends.mps.is_available():
+            devices.append("mps")
+        for device in devices:
+            if device != keras_device:
+                return device
+        self.skipTest(
+            f"Needs a device other than `get_device()` ({keras_device!r}). "
+            "This host has no CUDA or MPS device."
+        )
+
+    def _get_inputs_gradient(self, fn, x_value, device):
+        x = torch.tensor(x_value, device=device, requires_grad=True)
+        fn(x).sum().backward()
+        return x.grad
+
+    def test_custom_gradient_on_inputs_device(self):
+        """The gradient is on the device of the input, not `get_device()`."""
+        other_device = self._get_other_device()
+
+        @ops.custom_gradient
+        def scaled_square(x):
+            def grad_fn(*args, upstream=None):
+                if upstream is None:
+                    (upstream,) = args
+                return ops.multiply(upstream, ops.multiply(3.0, x))
+
+            return ops.square(x), grad_fn
+
+        x_value = np.arange(6, dtype="float32").reshape(2, 3)
+        grad = self._get_inputs_gradient(scaled_square, x_value, other_device)
+        expected = self._get_inputs_gradient(
+            scaled_square, x_value, get_device()
+        )
+        self.assertEqual(grad.device.type, other_device)
+        # The custom gradient is 3 * x, not the autodiff gradient 2 * x.
+        self.assertAllClose(grad, 3.0 * x_value)
+        self.assertAllClose(grad, expected)
+
+    @parameterized.named_parameters(("int8", "int8"), ("int4", "int4"))
+    def test_quantized_dense_inputs_gradient_on_inputs_device(self, mode):
+        """The quantized forward uses a custom gradient for the inputs."""
+        other_device = self._get_other_device()
+        layer = layers.Dense(8)
+        layer.build((None, 16))
+        layer.quantize(mode)
+
+        x_value = np.random.RandomState(0).standard_normal((2, 16))
+        x_value = x_value.astype("float32")
+        grad = self._get_inputs_gradient(layer, x_value, other_device)
+        expected = self._get_inputs_gradient(layer, x_value, get_device())
+        self.assertEqual(grad.device.type, other_device)
+        self.assertAllClose(grad, expected)
+
     def test_slice_fast_path_accepts_symint(self):
         """slice fast path should accept SymInt without crashing."""
         x = torch.arange(24).reshape(2, 3, 4)
@@ -161,6 +229,82 @@ class TorchCoreTest(testing.TestCase):
         out = ep.module()(torch.arange(12).reshape(3, 4))
         self.assertEqual(tuple(out.shape), (3, 2))
 
+    @parameterized.parameters(((3,),), ((2, 3),))
+    def test_custom_gradient_single_output(self, shape):
+        """A result with no `grad_fn` is the output and has no gradient."""
+        calls = 0
+
+        @torch_core.custom_gradient
+        def triple(x):
+            nonlocal calls
+            calls += 1
+            return x * 3.0
+
+        x = torch.ones(shape, requires_grad=True)
+        y = triple(x)
+        self.assertEqual(calls, 1)
+        self.assertEqual(tuple(y.shape), shape)
+        self.assertAllClose(y, np.full(shape, 3.0))
+        with self.assertRaisesRegex(ValueError, "grad_fn must be provided"):
+            y.sum().backward()
+
+
+@pytest.mark.skipif(
+    backend.backend() != "torch", reason="Requires torch backend"
+)
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="MPS device not available"
+)
+class TorchCoreMpsTest(testing.TestCase):
+    def test_convert_to_tensor_downcasts_ndarray_on_mps(self):
+        x = np.ones(3, dtype=np.float64)
+        with backend.device_scope("mps"):
+            out = convert_to_tensor(x)
+        self.assertEqual(standardize_dtype(out.dtype), "float32")
+
+        x = np.ones(3, dtype=np.complex128)
+        with backend.device_scope("mps"):
+            out = convert_to_tensor(x)
+        self.assertEqual(standardize_dtype(out.dtype), "complex64")
+
+    def test_convert_to_tensor_downcasts_sequence_on_mps(self):
+        x = [np.float64(1.0), np.float64(2.0)]
+        with backend.device_scope("mps"):
+            out = convert_to_tensor(x)
+        self.assertEqual(standardize_dtype(out.dtype), "float32")
+
+    def test_convert_to_tensor_downcasts_torch_tensor_on_mps(self):
+        x = torch.ones(3, dtype=torch.float64)
+        with backend.device_scope("mps"):
+            out = convert_to_tensor(x)
+        self.assertEqual(standardize_dtype(out.dtype), "float32")
+
+    def test_convert_to_tensor_meta_tensor_on_mps(self):
+        x = torch.empty(3, dtype=torch.float64, device="meta")
+        with backend.device_scope("mps"):
+            out = convert_to_tensor(x)
+            self.assertEqual(standardize_dtype(out.dtype), "float32")
+            out = convert_to_tensor(x, dtype="float32")
+            self.assertEqual(standardize_dtype(out.dtype), "float32")
+
+    def test_convert_to_tensor_explicit_float64_raises_on_mps(self):
+        x = np.ones(3, dtype=np.float64)
+        with backend.device_scope("mps"):
+            with self.assertRaises((RuntimeError, TypeError)):
+                convert_to_tensor(x, dtype="float64")
+
+    def test_convert_to_tensor_explicit_float32_no_downcast(self):
+        x = np.ones(3, dtype=np.float64)
+        with backend.device_scope("mps"):
+            out = convert_to_tensor(x, dtype="float32")
+        self.assertEqual(standardize_dtype(out.dtype), "float32")
+
+    def test_convert_to_tensor_no_downcast_on_cpu(self):
+        x = np.ones(3, dtype=np.float64)
+        with backend.device_scope("cpu"):
+            out = convert_to_tensor(x)
+        self.assertEqual(standardize_dtype(out.dtype), "float64")
+
 
 @pytest.mark.skipif(
     backend.backend() != "torch", reason="Requires torch backend"
@@ -203,7 +347,7 @@ class TorchCoreDistributedTest(TorchDistributedTestMixin, testing.TestCase):
             result = torch.addcmul(dtensor, plain_tensor, dtensor, value=0.5)
             self.assertIsInstance(result, DTensor)
 
-    def test_convert_to_tensor_pushes_dtensor_mode(self):
+    def test_activate_and_deactivate_dtensor_promotion(self):
         device_type = torch_core.get_device().split(":")[0]
         mesh = TorchDeviceMesh(device_type, np.array([0]))
         local_tensor = torch.ones((2, 2), device=device_type)
@@ -213,8 +357,6 @@ class TorchCoreDistributedTest(TorchDistributedTestMixin, testing.TestCase):
 
         torch_core.activate_dtensor_promotion()
 
-        convert_to_tensor(dtensor)
-
         plain_tensor = torch.zeros((2, 2), device=device_type)
         result = dtensor + plain_tensor
         self.assertIsInstance(result, DTensor)
@@ -223,6 +365,95 @@ class TorchCoreDistributedTest(TorchDistributedTestMixin, testing.TestCase):
                 result.to_local(), torch.ones((2, 2), device=device_type)
             )
         )
+
+        torch_core.deactivate_dtensor_promotion()
+
+        with self.assertRaisesRegex(
+            RuntimeError, "mixed torch.Tensor and DTensor"
+        ):
+            dtensor + plain_tensor
+
+    def _sharded_distribution(self):
+        mesh = DeviceMesh(
+            shape=(1,),
+            axis_names=["model"],
+            devices=np.array([distribution_lib.list_devices()[0]]),
+        )
+        layout_map = LayoutMap(mesh)
+        layout_map[".*"] = (None, "model")
+        return ModelParallel(layout_map=layout_map)
+
+    def test_dtensor_promotion_is_per_thread(self):
+        dist = self._sharded_distribution()
+        ones = np.ones((2, 2), dtype="float32")
+
+        def worker(v):
+            # The distribution is per thread, so the worker enters its own
+            # scope while the main thread is still in its scope.
+            with dist.scope():
+                v.assign_add(ones)
+
+        with dist.scope():
+            v = Variable(np.zeros((2, 2), dtype="float32"))
+            self.assertIsInstance(v.value.data, DTensor)
+            with concurrent.futures.ThreadPoolExecutor(1) as executor:
+                # `result()` re-raises any error from the worker thread.
+                executor.submit(worker, v).result()
+            # The worker's scope exit leaves this thread's promotion active.
+            v.assign_add(ones)
+        self.assertAllClose(v, 2 * ones)
+
+        # Leaving the scope ends the promotion on this thread.
+        with self.assertRaisesRegex(
+            RuntimeError, "mixed torch.Tensor and DTensor"
+        ):
+            v.assign_add(ones)
+
+    def test_clear_session_ends_dtensor_promotion(self):
+        dist = self._sharded_distribution()
+        ones = np.ones((2, 2), dtype="float32")
+
+        with dist.scope():
+            v = Variable(np.zeros((2, 2), dtype="float32"))
+            v.assign_add(ones)
+            # `clear_session()` resets the distribution, so the promotion
+            # ends with it and does not stay after the scope.
+            clear_session()
+            with self.assertRaisesRegex(
+                RuntimeError, "mixed torch.Tensor and DTensor"
+            ):
+                v.assign_add(ones)
+        with self.assertRaisesRegex(
+            RuntimeError, "mixed torch.Tensor and DTensor"
+        ):
+            v.assign_add(ones)
+        self.assertAllClose(v, ones)
+
+    def test_clear_session_on_other_thread_ends_dtensor_promotion(self):
+        dist = self._sharded_distribution()
+        ones = np.ones((2, 2), dtype="float32")
+        with dist.scope():
+            v = Variable(np.zeros((2, 2), dtype="float32"))
+        entered = threading.Event()
+        cleared = threading.Event()
+
+        def worker():
+            with dist.scope():
+                entered.set()
+                cleared.wait(timeout=60)
+            # `clear_session()` on the main thread does not leave the
+            # worker's mode on the worker's dispatch stack.
+            with self.assertRaisesRegex(
+                RuntimeError, "mixed torch.Tensor and DTensor"
+            ):
+                v.assign_add(ones)
+
+        with concurrent.futures.ThreadPoolExecutor(1) as executor:
+            future = executor.submit(worker)
+            entered.wait(timeout=60)
+            clear_session()
+            cleared.set()
+            future.result()
 
     def test_convert_to_numpy_dtensor(self):
         device_type = torch_core.get_device().split(":")[0]
@@ -237,6 +468,25 @@ class TorchCoreDistributedTest(TorchDistributedTestMixin, testing.TestCase):
         self.assertIsInstance(nv, np.ndarray)
         self.assertEqual(nv.shape, (2, 2))
         self.assertTrue(np.allclose(nv, 1.0))
+
+    def test_dtensor_variable_repr_leaves_out_value(self):
+        mesh = DeviceMesh(
+            shape=(1,),
+            axis_names=["x"],
+            devices=np.array([distribution_lib.list_devices()[0]]),
+        )
+
+        layout_map = LayoutMap(mesh)
+        layout_map[".*"] = ("x", None)
+        dist = ModelParallel(layout_map=layout_map)
+
+        set_distribution(dist)
+
+        v = Variable(torch.ones((2, 2)))
+
+        self.assertIsInstance(v.value.data, DTensor)
+        self.assertNotIn("value=", repr(v))
+        self.assertIn("shape=(2, 2)", repr(v))
 
     @parameterized.parameters(
         ("callable",),
@@ -299,3 +549,22 @@ class TorchCoreDistributedTest(TorchDistributedTestMixin, testing.TestCase):
                 torch.zeros((2, 2), device=v.value.data.to_local().device),
             )
         )
+
+    def test_data_parallel_scope_keeps_torch_compile(self):
+        mesh = DeviceMesh(
+            shape=(1,),
+            axis_names=["batch"],
+            devices=np.array([distribution_lib.list_devices()[0]]),
+        )
+        counter = CompileCounter()
+
+        def add_one(x):
+            return x + 1
+
+        torch._dynamo.reset()
+        with DataParallel(device_mesh=mesh).scope():
+            result = torch.compile(add_one, backend=counter)(torch.zeros(2))
+
+        # TorchDynamo skips every frame while a dispatch mode is active.
+        self.assertEqual(counter.frame_count, 1)
+        self.assertAllClose(result, np.ones(2))

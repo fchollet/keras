@@ -49,13 +49,14 @@ jobs:
 
     name: Run tests on GPU
     runs-on: linux-x86-g2-32-l4-1gpu
-    timeout-minutes: 180
+    timeout-minutes: 240
 
     container:
       image: python:3.11-slim
 
     env:
       KERAS_HOME: .github/workflows/config/${{ matrix.backend }}
+      XLA_FLAGS: ${{ matrix.backend == 'jax' && '--xla_gpu_autotune_level=0 --xla_gpu_enable_triton_gemm=false --xla_gpu_disable_gpuasm_optimizations=true' || '' }}
 
     steps:
       - name: Checkout ${{ github.ref }}

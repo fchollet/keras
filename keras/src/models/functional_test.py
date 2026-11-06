@@ -11,6 +11,7 @@ from keras.src import layers
 from keras.src import ops
 from keras.src import saving
 from keras.src import testing
+from keras.src.backend.common import standardize_dtype
 from keras.src.backend.common.keras_tensor import KerasTensor
 from keras.src.dtype_policies import dtype_policy
 from keras.src.layers.core.input_layer import Input
@@ -394,6 +395,42 @@ class FunctionalTest(testing.TestCase):
         ):
             model(np.random.random(()))
 
+    def test_last_axis_must_match_at_same_rank(self):
+        # A last axis of size 1 only bridges a rank difference of one. At the
+        # same rank it is compared like any other axis.
+        inputs = Input(shape=(28, 28, 1))
+        model = Functional(inputs, layers.Identity()(inputs))
+        with self.assertRaisesRegex(
+            ValueError,
+            r"expected shape=\(None, 28, 28, 1\), "
+            r"found shape=\(4, 28, 28, 3\)",
+        ):
+            model(np.zeros((4, 28, 28, 3)))
+
+        inputs = Input(shape=(3,))
+        model = Functional(inputs, layers.Identity()(inputs))
+        with self.assertRaisesRegex(
+            ValueError, r"expected shape=\(None, 3\), found shape=\(2, 1\)"
+        ):
+            model(np.zeros((2, 1)))
+
+    def test_rank_standardization_checks_the_other_axes(self):
+        # A last axis of size 1 bridges a rank difference of one only when
+        # the other axes match.
+        inputs = Input(shape=(3, 1))
+        model = Functional(inputs, layers.Identity()(inputs))
+        # Downranking
+        with self.assertRaisesRegex(
+            ValueError,
+            r"expected shape=\(None, 3, 1\), found shape=\(2, 3, 5, 1\)",
+        ):
+            model(np.zeros((2, 3, 5, 1)))
+        # Upranking
+        with self.assertRaisesRegex(
+            ValueError, r"expected shape=\(None, 3, 1\), found shape=\(2, 1\)"
+        ):
+            model(np.zeros((2, 1)))
+
     def test_dtype_standardization(self):
         float_input = Input(shape=(2,), dtype="float16")
         int_input = Input(shape=(2,), dtype="int32")
@@ -402,8 +439,8 @@ class FunctionalTest(testing.TestCase):
         model = Functional((float_input, int_input), (float_output, int_output))
         float_data, int_data = model((np.ones((2, 2)), np.ones((2, 2))))
 
-        self.assertEqual(backend.standardize_dtype(float_data.dtype), "float16")
-        self.assertEqual(backend.standardize_dtype(int_data.dtype), "int32")
+        self.assertEqual(standardize_dtype(float_data.dtype), "float16")
+        self.assertEqual(standardize_dtype(int_data.dtype), "int32")
 
     def test_serialization(self):
         # Test basic model

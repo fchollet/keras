@@ -136,19 +136,16 @@ def compile_args_from_training_config(training_config, custom_objects=None):
         from keras.src import optimizers
 
         optimizer_config = training_config["optimizer_config"]
-        optimizer = optimizers.deserialize(optimizer_config)
-        # Ensure backwards compatibility for optimizers in legacy H5 files
-        optimizer = _resolve_compile_arguments_compat(
-            optimizer, optimizer_config, optimizers
+        optimizer_config = _adapt_optimizer_config(
+            optimizer_config, custom_objects
         )
+        optimizer = optimizers.deserialize(optimizer_config)
 
         # Recover losses.
         loss = None
         loss_config = training_config.get("loss", None)
         if loss_config is not None:
             loss = _deserialize_nested_config(losses.deserialize, loss_config)
-            # Ensure backwards compatibility for losses in legacy H5 files
-            loss = _resolve_compile_arguments_compat(loss, loss_config, losses)
 
         # Recover metrics.
         metrics = None
@@ -156,10 +153,6 @@ def compile_args_from_training_config(training_config, custom_objects=None):
         if metrics_config is not None:
             metrics = _deserialize_nested_config(
                 _deserialize_metric, metrics_config
-            )
-            # Ensure backwards compatibility for metrics in legacy H5 files
-            metrics = _resolve_compile_arguments_compat(
-                metrics, metrics_config, metrics_module
             )
 
         # Recover weighted metrics.
@@ -222,6 +215,43 @@ def _deserialize_nested_config(deserialize_fn, config):
     )
 
 
+def _adapt_optimizer_config(optimizer_config, custom_objects):
+    """Adapt optimizer config from Keras 2 to Keras 3.
+
+    This covers both legacy optimizers and new optimizers.
+    """
+    optimizer_config = optimizer_config.copy()
+    if "class_name" in optimizer_config:
+        # New Keras 2 optimizers are decorated with
+        # `register_keras_serializable`, which causes them to be serialized with
+        # a `Custom>` prefix in the class name.
+        class_name = optimizer_config["class_name"]
+        if (
+            class_name is not None
+            and class_name not in custom_objects
+            and class_name.startswith("Custom>")
+        ):
+            from keras.src import optimizers
+
+            class_name = class_name.split(">", 1)[1]
+            if class_name in optimizers.ALL_OBJECTS_DICT:
+                optimizer_config["class_name"] = class_name
+
+    inner_config = optimizer_config.get("config", None)
+    if isinstance(inner_config, dict):
+        # These constructor / config arguments were removed in Keras 3.
+        unsupported_args = [
+            "jit_compile",
+            "is_legacy_optimizer",
+        ]
+        inner_config = {
+            k: v for k, v in inner_config.items() if k not in unsupported_args
+        }
+        optimizer_config["config"] = inner_config
+
+    return optimizer_config
+
+
 def _deserialize_metric(metric_config):
     """Deserialize metrics, leaving special strings untouched."""
     if metric_config in ["accuracy", "acc", "crossentropy", "ce"]:
@@ -230,19 +260,6 @@ def _deserialize_metric(metric_config):
         # shape.
         return metric_config
     return metrics_module.deserialize(metric_config)
-
-
-def _resolve_compile_arguments_compat(obj, obj_config, module):
-    """Resolves backwards compatibility issues with training config arguments.
-
-    This helper function accepts built-in Keras modules such as optimizers,
-    losses, and metrics to ensure an object being deserialized is compatible
-    with Keras 3 built-ins. For legacy H5 files saved within Keras 3,
-    this does nothing.
-    """
-    if isinstance(obj, str) and obj not in module.ALL_OBJECTS_DICT:
-        obj = module.get(obj_config["config"]["name"])
-    return obj
 
 
 def try_build_compiled_arguments(model):

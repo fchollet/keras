@@ -53,4 +53,6 @@ class Adadelta(
             alpha=1 - rho,
         )
 
-        torch._foreach_add_(variables, delta_vars, alpha=lr)
+        # `alpha=lr` would read the tensor with `.item()` and break the
+        # `torch.compile` graph.
+        torch._foreach_add_(variables, torch._foreach_mul(delta_vars, lr))

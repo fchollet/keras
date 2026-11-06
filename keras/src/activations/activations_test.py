@@ -2,7 +2,9 @@ import numpy as np
 
 from keras.src import activations
 from keras.src import backend
+from keras.src import ops
 from keras.src import testing
+from keras.src.saving import object_registration
 
 
 def _ref_softmax(values):
@@ -1026,3 +1028,41 @@ class ActivationsTest(testing.TestCase):
 
         with self.assertRaises(ValueError):
             activations.get("typo")
+
+    def test_serialize_deserialize_built_in_activation(self):
+        serialized = activations.serialize(activations.gelu)
+        self.assertEqual(serialized, "gelu")
+
+        deserialized = activations.deserialize(serialized)
+        self.assertIs(deserialized, activations.gelu)
+
+    def test_serialize_deserialize_op_activation(self):
+        serialized = activations.serialize(ops.gelu)
+        self.assertIsInstance(serialized, dict)
+
+        deserialized = activations.deserialize(serialized)
+        self.assertIs(deserialized, ops.gelu)
+        self.assertIsNot(deserialized, activations.gelu)
+
+    def test_serialize_deserialize_registered_function(self):
+        @object_registration.register_keras_serializable(package="serial_test")
+        def gelu(x):
+            return x
+
+        serialized = activations.serialize(gelu)
+        self.assertIsInstance(serialized, dict)
+
+        deserialized = activations.deserialize(serialized)
+        self.assertIs(deserialized, gelu)
+
+    def test_serialize_deserialize_unregistered_function(self):
+        def gelu(x):
+            return x
+
+        serialized = activations.serialize(gelu)
+        self.assertIsInstance(serialized, dict)
+
+        deserialized = activations.deserialize(
+            serialized, custom_objects={"gelu": gelu}
+        )
+        self.assertIs(deserialized, gelu)

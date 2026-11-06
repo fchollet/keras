@@ -5,7 +5,7 @@ on:
     types:
       - 'opened'
       - 'reopened'
-  issue_comment:
+  issue_comment: # zizmor: ignore[dangerous-triggers]
     types:
       - 'created'
   workflow_dispatch:

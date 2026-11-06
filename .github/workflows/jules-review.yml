@@ -6,7 +6,7 @@ name: Jules PR Q&A
 # comment (threaded, for inline questions).
 
 on:
-  issue_comment:
+  issue_comment: # zizmor: ignore[dangerous-triggers]
     types: [created]
   pull_request_review_comment:
     types: [created]

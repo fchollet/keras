@@ -284,6 +284,11 @@ class EinsumProjectionGeometry(ProjectionGeometry):
         self.layer._set_quantization_info()
 
     def calibration_rows_columns(self, kernel_shape):
+        if len(kernel_shape) not in (2, 3):
+            raise ValueError(
+                "Calibration only supports 2D or 3D kernels. Received: "
+                f"kernel_shape={tuple(kernel_shape)}"
+            )
         if len(kernel_shape) == 2:
             return kernel_shape[0], kernel_shape[1]
         # 3D kernels are split by locating the model dimension (the largest

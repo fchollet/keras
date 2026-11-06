@@ -36,6 +36,11 @@ dependencies = [
 ]
 # Run also: pip install -r requirements.txt
 
+[project.optional-dependencies]
+# Remote file access (e.g. saving to / loading from `gs://`) without
+# TensorFlow.
+gcs = ["etils[epath-gcs]"]
+
 [project.urls]
 Home = "https://keras.io/"
 Repository = "https://github.com/keras-team/keras"

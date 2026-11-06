@@ -457,6 +457,39 @@ class ExportTorchTest(testing.TestCase):
             out = loaded_model(x)
             self.assertEqual(out.shape, (batch_size, 4))
 
+    @parameterized.named_parameters(
+        # A rank-3 input keeps CUDA off `torch._int_mm`, whose shape check
+        # compares the batch size.
+        ("dense", (3, 64), layers.Dense, (16,)),
+        ("einsum_dense", (64,), layers.EinsumDense, ("ab,bc->ac", 16)),
+    )
+    def test_export_int8_with_dynamic_shapes(
+        self, input_shape, layer_class, layer_args
+    ):
+        """Export an int8 model with a dynamic batch dimension.
+
+        The int8 contraction must not compare the batch size, and the
+        exported program must match the model bit for bit.
+        """
+        model = models.Sequential(
+            [layers.Input(shape=input_shape), layer_class(*layer_args)]
+        )
+        model.quantize("int8", verbose=False)
+
+        temp_filepath = os.path.join(self.get_temp_dir(), "int8_batch.pt2")
+        batch = torch.export.Dim("batch", min=1, max=128)
+        model.export(
+            temp_filepath,
+            format="torch",
+            dynamic_shapes={0: batch},
+        )
+        loaded_model = torch.export.load(temp_filepath).module()
+
+        for batch_size in (1, 3, 20):
+            x = np.random.normal(size=(batch_size,) + input_shape)
+            x = ops.convert_to_tensor(x.astype("float32"))
+            self.assertAllEqual(loaded_model(x), model(x))
+
     def test_export_with_supported_kwargs(self):
         model = models.Sequential([layers.Input(shape=(4,)), layers.Dense(1)])
         ref_input = np.random.normal(size=(1, 4)).astype("float32")

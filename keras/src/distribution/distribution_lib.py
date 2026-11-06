@@ -604,6 +604,12 @@ class ModelParallel(Distribution):
         print(v.path)
     ```
 
+    With the PyTorch backend, each process holds only its own shards of a
+    sharded variable. Reading the full value, for example in `model.save()`,
+    `model.get_weights()`, `model.predict()` or
+    `keras.ops.convert_to_numpy()`, gathers the shards from all processes,
+    so call these methods on every process, not only on process 0.
+
     Args:
         layout_map: `LayoutMap` instance which map the variable path to the
             corresponding tensor layout.
@@ -696,6 +702,8 @@ class LayoutMap(collections.abc.MutableMapping):
     as value, and will be converted to `TensorLayout`.
 
     ```python
+    device_mesh = DeviceMesh((2, 2), ["batch", "model"], list_devices())
+
     layout_map = LayoutMap(device_mesh)
     layout_map['.*dense.*kernel'] = (None, 'model')
     layout_map['.*dense.*bias'] = ('model',)
@@ -831,7 +839,10 @@ def set_distribution(value):
         value: a `Distribution` instance.
     """
     global_state.set_global_attribute(GLOBAL_ATTRIBUTE_NAME, value)
-    if value is not None:
+    # `DataParallel` replicates the variables and keeps the inputs local, so
+    # there is nothing to promote. On torch, the promotion mode would also make
+    # TorchDynamo skip every frame, which disables `jit_compile=True`.
+    if value is not None and not isinstance(value, DataParallel):
         if hasattr(distribution_lib, "activate_dtensor_promotion"):
             distribution_lib.activate_dtensor_promotion()
     else:

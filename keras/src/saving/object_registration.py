@@ -179,6 +179,11 @@ def get_registered_name(obj):
     if obj in GLOBAL_CUSTOM_NAMES:
         return GLOBAL_CUSTOM_NAMES[obj]
     else:
+        # We blindly return `__name__` here under the assumption that during
+        # deserialization, the user will pass a `custom_objects` dict that will
+        # contain this name.
+        # Note: this should never be used for keras functions and objects, but
+        # we allow it for backwards compatibility.
         return obj.__name__
 
 
@@ -200,7 +205,7 @@ def get_registered_object(name, custom_objects=None, module_objects=None):
     ```python
     def from_config(cls, config, custom_objects=None):
         if 'my_custom_object_name' in config:
-            config['hidden_cls'] = tf.keras.saving.get_registered_object(
+            config['hidden_cls'] = keras.saving.get_registered_object(
                 config['my_custom_object_name'], custom_objects=custom_objects)
     ```
 

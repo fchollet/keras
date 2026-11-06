@@ -335,8 +335,7 @@ class BaseConv(Layer):
             store[str(i)] = variable
 
     def load_own_variables(self, store):
-        if not self.lora_enabled:
-            self._check_load_own_variables(store)
+        self._check_load_own_variables(store)
         # Do nothing if the layer isn't yet built
         if not self.built:
             return
@@ -390,6 +389,11 @@ class BaseConv(Layer):
 
     def _check_load_own_variables(self, store):
         all_vars = self._trainable_variables + self._non_trainable_variables
+        if self.lora_enabled:
+            # A save merges the LoRA update into the kernel, so the store
+            # holds no LoRA factors.
+            factors = {id(self.lora_kernel_a), id(self.lora_kernel_b)}
+            all_vars = [v for v in all_vars if id(v) not in factors]
         if len(store.keys()) != len(all_vars):
             if len(all_vars) == 0 and not self.built:
                 raise ValueError(

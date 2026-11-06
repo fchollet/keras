@@ -16,6 +16,8 @@ from keras.src.backend.torch.distributed_test_utils import (
 from keras.src.backend.torch.ops import core
 from keras.src.backend.torch.ops.core import Variable
 from keras.src.distribution.distribution_lib import DeviceMesh
+from keras.src.distribution.distribution_lib import LayoutMap
+from keras.src.distribution.distribution_lib import ModelParallel
 from keras.src.distribution.distribution_lib import TensorLayout
 
 
@@ -271,6 +273,21 @@ class TorchDistributionLibTest(TorchDistributedTestMixin, testing.TestCase):
         if expected_placement_type == torch_tensor.Shard:
             self.assertEqual(backend_layout.placements[0].dim, 0)
 
+    def test_to_backend_layout_reuses_backend_mesh(self):
+        mesh = DeviceMesh(
+            shape=(1,), axis_names=["x"], devices=self._get_mesh_devices()
+        )
+        sharded = distribution_lib._to_backend_layout(
+            TensorLayout(axes=("x", None), device_mesh=mesh)
+        )
+        replicated = distribution_lib._to_backend_layout(
+            TensorLayout(axes=(None, None), device_mesh=mesh)
+        )
+        # Building a torch mesh can create process groups, so every layout
+        # of a Keras mesh shares one torch mesh.
+        self.assertIs(sharded.device_mesh, mesh.backend_mesh)
+        self.assertIs(replicated.device_mesh, mesh.backend_mesh)
+
     @parameterized.parameters(
         (
             None,
@@ -336,6 +353,58 @@ class TorchDistributionLibTest(TorchDistributedTestMixin, testing.TestCase):
             self.assertIs(dtensor, tensor)
         else:
             self.assertIsInstance(dtensor, torch_tensor.DTensor)
+
+    @parameterized.named_parameters(
+        ("replicate", torch_tensor.Replicate()),
+        ("partial", torch_tensor.Partial()),
+    )
+    def test_distribute_tensor_redistributes_dtensor(self, placement):
+        mesh = DeviceMesh(
+            shape=(1,), axis_names=["x"], devices=self._get_mesh_devices()
+        )
+        layout = TensorLayout(axes=("x", None), device_mesh=mesh)
+        source = torch.ones((2, 2), requires_grad=True)
+        tensor = torch_tensor.DTensor.from_local(
+            source, layout.backend_layout.device_mesh, [placement]
+        )
+
+        dtensor = distribution_lib.distribute_tensor(tensor, layout)
+
+        self.assertEqual(dtensor.placements, (torch_tensor.Shard(0),))
+        self.assertAllClose(dtensor.full_tensor(), np.ones((2, 2)))
+        # Layer outputs are relaid out in the forward pass, so gradients
+        # must flow through.
+        dtensor.full_tensor().sum().backward()
+        self.assertAllClose(source.grad, np.ones((2, 2)))
+
+    @parameterized.named_parameters(
+        ("replicated_dtensor", torch_tensor.Replicate(), False),
+        ("partial_dtensor", torch_tensor.Partial(), False),
+        ("dtensor_with_grad_fn", torch_tensor.Replicate(), True),
+        ("tensor_with_grad_fn", None, True),
+    )
+    def test_assign_to_sharded_variable(self, placement, requires_grad):
+        mesh = DeviceMesh(
+            shape=(1,), axis_names=["x"], devices=self._get_mesh_devices()
+        )
+        layout = TensorLayout(axes=("x", None), device_mesh=mesh)
+        distribution = ModelParallel(layout_map=LayoutMap(mesh))
+        with distribution.scope():
+            variable = Variable(
+                np.zeros((2, 2), dtype="float32"), layout=layout
+            )
+            value = torch.ones((2, 2), requires_grad=requires_grad)
+            if placement is not None:
+                value = torch_tensor.DTensor.from_local(
+                    value, variable.value.device_mesh, [placement]
+                )
+            # `value * 2` has a `grad_fn` when `value` requires grad, like
+            # values computed in a forward pass.
+            variable.assign(value * 2)
+
+        self.assertTrue(variable.value.is_leaf)
+        self.assertEqual(variable.value.placements, (torch_tensor.Shard(0),))
+        self.assertAllClose(variable.value.full_tensor(), np.full((2, 2), 2.0))
 
     @parameterized.parameters(
         ("tensor", False),

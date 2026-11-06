@@ -3,7 +3,7 @@ import math
 import jax
 import jax.numpy as jnp
 
-from keras.src.backend import standardize_dtype
+from keras.src.backend.common import standardize_dtype
 from keras.src.backend.jax.ops.core import convert_to_tensor
 from keras.src.utils.module_utils import scipy
 

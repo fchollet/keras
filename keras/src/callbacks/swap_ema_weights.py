@@ -197,6 +197,6 @@ class SwapEMAWeights(Callback):
             self._ema_weights_in_model = True
 
     def on_predict_end(self, logs=None):
-        if not self._ema_weights_in_model:
+        if self._ema_weights_in_model:
             self._swap_variables()
             self._ema_weights_in_model = False

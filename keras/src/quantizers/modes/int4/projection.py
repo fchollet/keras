@@ -82,22 +82,23 @@ class Int4ProjectionHandlers:
                 trainable=False,
                 autocast=False,
             )
-
-        # Recorded for unpacking and reshaping at runtime.
-        layer._int4_block_size = block_size
+        else:
+            layer.kernel_zero = None
+            layer.g_idx = None
 
     def _get_projection_quantized_weight(self, layer, geometry):
-        grouped = is_grouped(layer._int4_block_size)
         _, columns = geometry.rows_columns(geometry.weight_shape)
         return QuantizedWeight(
             codes=layer._kernel,
             scale=layer.kernel_scale,
             layout=Int4Pairs(axis=-1, orig_len=columns),
-            scheme=int4_scheme(layer._int4_block_size),
+            scheme=int4_scheme(
+                self.resolve_block_size(layer, layer.quantization_config)
+            ),
             shape=geometry.weight_shape,
             axis=0,
-            zero_point=layer.kernel_zero if grouped else None,
-            g_idx=layer.g_idx if grouped else None,
+            zero_point=layer.kernel_zero,
+            g_idx=layer.g_idx,
         )
 
     def _call_projection(self, layer, inputs, training=None):

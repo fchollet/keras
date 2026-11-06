@@ -2,13 +2,11 @@
 
 import collections
 import enum
-import functools
 import json
 
 import numpy as np
 
 from keras.src.legacy.saving import serialization
-from keras.src.saving import serialization_lib
 from keras.src.utils.module_utils import tensorflow as tf
 
 _EXTENSION_TYPE_SPEC = "_EXTENSION_TYPE_SPEC"
@@ -47,35 +45,11 @@ def decode(json_string):
     return json.loads(json_string, object_hook=_decode_helper)
 
 
-def decode_and_deserialize(
-    json_string, module_objects=None, custom_objects=None
-):
-    """Decodes the JSON and deserializes any Keras objects found in the dict."""
-    return json.loads(
-        json_string,
-        object_hook=functools.partial(
-            _decode_helper,
-            deserialize=True,
-            module_objects=module_objects,
-            custom_objects=custom_objects,
-        ),
-    )
-
-
-def _decode_helper(
-    obj, deserialize=False, module_objects=None, custom_objects=None
-):
+def _decode_helper(obj):
     """A decoding helper that is TF-object aware.
 
     Args:
       obj: A decoded dictionary that may represent an object.
-      deserialize: Boolean. When True, deserializes any Keras
-        objects found in `obj`. Defaults to `False`.
-      module_objects: A dictionary of built-in objects to look the name up in.
-        Generally, `module_objects` is provided by midlevel library
-        implementers.
-      custom_objects: A dictionary of custom objects to look the name up in.
-        Generally, `custom_objects` is provided by the end user.
 
     Returns:
       The decoded object.
@@ -105,26 +79,6 @@ def _decode_helper(
             return tuple(_decode_helper(i) for i in obj["items"])
         elif obj["class_name"] == "__ellipsis__":
             return Ellipsis
-        elif deserialize and "__passive_serialization__" in obj:
-            # __passive_serialization__ is added by the JSON encoder when
-            # encoding an object that has a `get_config()` method.
-            try:
-                if (
-                    "module" not in obj
-                ):  # TODO(nkovela): Add TF SavedModel scope
-                    return serialization.deserialize_keras_object(
-                        obj,
-                        module_objects=module_objects,
-                        custom_objects=custom_objects,
-                    )
-                else:
-                    return serialization_lib.deserialize_keras_object(
-                        obj,
-                        module_objects=module_objects,
-                        custom_objects=custom_objects,
-                    )
-            except ValueError:
-                pass
         elif obj["class_name"] == "__bytes__":
             return obj["value"].encode("utf-8")
     return obj

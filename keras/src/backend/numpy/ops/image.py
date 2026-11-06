@@ -2,6 +2,8 @@ import ml_dtypes
 import numpy as np
 
 from keras.src import backend
+from keras.src.backend.common import is_float_dtype
+from keras.src.backend.common import standardize_dtype
 from keras.src.backend.numpy.ops.core import convert_to_tensor
 from keras.src.random.seed_generator import draw_seed
 from keras.src.utils.module_utils import scipy
@@ -75,7 +77,7 @@ def rgb_to_grayscale(images, data_format=None):
 def rgb_to_hsv(images, data_format=None):
     # Ref: dm_pix
     images = convert_to_tensor(images)
-    dtype = backend.standardize_dtype(images.dtype)
+    dtype = standardize_dtype(images.dtype)
     data_format = backend.standardize_data_format(data_format)
     channels_axis = -1 if data_format == "channels_last" else -3
     if len(images.shape) not in (3, 4):
@@ -84,7 +86,7 @@ def rgb_to_hsv(images, data_format=None):
             "or rank 4 (batch of images). Received input with shape: "
             f"images.shape={images.shape}"
         )
-    if not backend.is_float_dtype(dtype):
+    if not is_float_dtype(dtype):
         raise ValueError(
             "Invalid images dtype: expected float dtype. "
             f"Received: images.dtype={dtype}"
@@ -134,10 +136,10 @@ def hsv_to_rgb(images, data_format=None):
             "or rank 4 (batch of images). Received input with shape: "
             f"images.shape={images.shape}"
         )
-    if not backend.is_float_dtype(dtype):
+    if not is_float_dtype(dtype):
         raise ValueError(
             "Invalid images dtype: expected float dtype. "
-            f"Received: images.dtype={backend.standardize_dtype(dtype)}"
+            f"Received: images.dtype={standardize_dtype(dtype)}"
         )
     hue, saturation, value = np.split(images, 3, channels_axis)
     hue = np.squeeze(hue, channels_axis)
@@ -589,7 +591,7 @@ def affine_transform(
         )
 
     # `scipy.ndimage.map_coordinates` lacks support for float16 and bfloat16.
-    input_dtype = backend.standardize_dtype(images.dtype)
+    input_dtype = standardize_dtype(images.dtype)
     compute_dtype = backend.result_type(input_dtype, "float32")
     images = images.astype(compute_dtype)
     transform = transform.astype(compute_dtype)
@@ -972,7 +974,7 @@ def map_coordinates(
         padded = np.pad(inputs, padding, mode=pad_mode)
 
     # `scipy.ndimage.map_coordinates` lacks support for float16 and bfloat16.
-    if backend.is_float_dtype(padded.dtype):
+    if is_float_dtype(padded.dtype):
         padded = padded.astype("float32")
     result = scipy.ndimage.map_coordinates(
         padded, shifted_coords, order=order, mode=fill_mode, cval=fill_value
@@ -991,9 +993,9 @@ def gaussian_blur(
 
         def _get_gaussian_kernel2d(size, sigma):
             size = np.asarray(size, dtype)
-            kernel1d_x = _get_gaussian_kernel1d(size[0], sigma[0])
-            kernel1d_y = _get_gaussian_kernel1d(size[1], sigma[1])
-            return np.outer(kernel1d_y, kernel1d_x)
+            kernel1d_height = _get_gaussian_kernel1d(size[0], sigma[0])
+            kernel1d_width = _get_gaussian_kernel1d(size[1], sigma[1])
+            return np.outer(kernel1d_height, kernel1d_width)
 
         kernel = _get_gaussian_kernel2d(kernel_size, sigma)
         kernel = kernel[:, :, np.newaxis]
@@ -1004,7 +1006,7 @@ def gaussian_blur(
     images = convert_to_tensor(images)
     kernel_size = convert_to_tensor(kernel_size)
     sigma = convert_to_tensor(sigma)
-    input_dtype = backend.standardize_dtype(images.dtype)
+    input_dtype = standardize_dtype(images.dtype)
     # `scipy.signal.convolve2d` lacks support for float16 and bfloat16.
     compute_dtype = backend.result_type(input_dtype, "float32")
     images = images.astype(compute_dtype)

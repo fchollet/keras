@@ -1,6 +1,6 @@
-from keras.src import backend
 from keras.src import tree
 from keras.src.api_export import keras_export
+from keras.src.backend.common import get_keras_mask
 from keras.src.layers.layer import Layer
 from keras.src.saving import serialization_lib
 
@@ -61,7 +61,7 @@ class Pipeline(Layer):
             outputs = layer(inputs, **kwargs)
             inputs = outputs
 
-            mask = tree.map_structure(backend.get_keras_mask, outputs)
+            mask = tree.map_structure(get_keras_mask, outputs)
         return outputs
 
     @classmethod

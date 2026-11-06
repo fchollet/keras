@@ -60,9 +60,12 @@ class Int4Strategy(
             return QuantizedDTypePolicy(mode_str, source_name)
 
     def config_from_policy(self, policy):
+        # The config builds what a layer built from the policy name holds,
+        # so a legacy bare "int4" name, which a build reads as per-channel,
+        # gives a per-channel config.
         if isinstance(policy, Int4DTypePolicy):
             return Int4QuantizationConfig(block_size=policy.block_size)
-        return Int4QuantizationConfig()
+        return Int4QuantizationConfig(block_size=-1)
 
     def policy_suffix(self, layer, config):
         # Include block_size in policy name for sub-channel quantization.

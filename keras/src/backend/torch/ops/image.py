@@ -8,6 +8,9 @@ import torch._dynamo as dynamo
 import torch.nn.functional as F
 
 from keras.src import backend
+from keras.src.backend.common import is_float_dtype
+from keras.src.backend.common import is_int_dtype
+from keras.src.backend.common import standardize_dtype
 from keras.src.backend.torch.ops.core import cast
 from keras.src.backend.torch.ops.core import convert_to_tensor
 from keras.src.backend.torch.ops.core import get_device
@@ -85,10 +88,10 @@ def rgb_to_hsv(images, data_format=None):
             "or rank 4 (batch of images). Received input with shape: "
             f"images.shape={images.shape}"
         )
-    if not backend.is_float_dtype(dtype):
+    if not is_float_dtype(dtype):
         raise ValueError(
             "Invalid images dtype: expected float dtype. "
-            f"Received: images.dtype={backend.standardize_dtype(dtype)}"
+            f"Received: images.dtype={standardize_dtype(dtype)}"
         )
     eps = torch.finfo(dtype).eps
     images = torch.where(torch.abs(images) < eps, 0.0, images)
@@ -135,10 +138,10 @@ def hsv_to_rgb(images, data_format=None):
             "or rank 4 (batch of images). Received input with shape: "
             f"images.shape={images.shape}"
         )
-    if not backend.is_float_dtype(dtype):
+    if not is_float_dtype(dtype):
         raise ValueError(
             "Invalid images dtype: expected float dtype. "
-            f"Received: images.dtype={backend.standardize_dtype(dtype)}"
+            f"Received: images.dtype={standardize_dtype(dtype)}"
         )
     hue, saturation, value = torch.split(images, [1, 1, 1], channels_axis)
     hue = torch.squeeze(hue, channels_axis)
@@ -505,7 +508,7 @@ def perspective_transform(
     data_format = backend.standardize_data_format(data_format)
 
     images = convert_to_tensor(images)
-    dtype = backend.standardize_dtype(images.dtype)
+    dtype = standardize_dtype(images.dtype)
     start_points = convert_to_tensor(start_points, dtype=dtype)
     end_points = convert_to_tensor(end_points, dtype=dtype)
 
@@ -755,6 +758,9 @@ def compute_homography_matrix(start_points, end_points):
 
 def _mirror_index_fixer(index, size):
     s = size - 1  # Half-wavelength of triangular wave
+    if s == 0:
+        # A size 1 axis mirrors every index onto its only element.
+        return torch.zeros_like(index)
     # Scaled, integer-valued version of the triangular wave |x - round(x)|
     return torch.abs((index + s) % (2 * s) - s)
 
@@ -893,9 +899,9 @@ def gaussian_blur(
             return kernel1d / torch.sum(kernel1d)
 
         def _get_gaussian_kernel2d(size, sigma):
-            kernel1d_x = _get_gaussian_kernel1d(size[0], sigma[0])
-            kernel1d_y = _get_gaussian_kernel1d(size[1], sigma[1])
-            return torch.outer(kernel1d_y, kernel1d_x)
+            kernel1d_height = _get_gaussian_kernel1d(size[0], sigma[0])
+            kernel1d_width = _get_gaussian_kernel1d(size[1], sigma[1])
+            return torch.outer(kernel1d_height, kernel1d_width)
 
         kernel = _get_gaussian_kernel2d(kernel_size, sigma)
 
@@ -904,7 +910,7 @@ def gaussian_blur(
 
     data_format = backend.standardize_data_format(data_format)
     images = convert_to_tensor(images)
-    kernel_size = convert_to_tensor(kernel_size)
+    kernel_size = tuple(int(size) for size in kernel_size)
     sigma = convert_to_tensor(sigma)
     dtype = images.dtype
 
@@ -928,11 +934,23 @@ def gaussian_blur(
 
     kernel = kernel.expand(num_channels, 1, kernel_size[0], kernel_size[1])
 
+    pad_height = (kernel_size[0] - 1) // 2
+    pad_width = (kernel_size[1] - 1) // 2
+    images = torch.nn.functional.pad(
+        images,
+        (
+            pad_width,
+            kernel_size[1] - 1 - pad_width,
+            pad_height,
+            kernel_size[0] - 1 - pad_height,
+        ),
+    )
+
     blurred_images = torch.nn.functional.conv2d(
         images,
         kernel,
         stride=1,
-        padding=int(kernel_size[0] // 2),
+        padding=0,
         groups=num_channels,
     )
 
@@ -1170,7 +1188,7 @@ def _scale_and_translate(
     input_shape = x.shape
     if len(spatial_dims) == 0:
         return x
-    if backend.is_int_dtype(x.dtype):
+    if is_int_dtype(x.dtype):
         output = cast(x, "float32")
         use_rounding = True
     else:

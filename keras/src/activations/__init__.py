@@ -1,5 +1,3 @@
-import types
-
 from keras.src.activations.activations import celu
 from keras.src.activations.activations import elu
 from keras.src.activations.activations import exponential
@@ -31,7 +29,6 @@ from keras.src.activations.activations import tanh
 from keras.src.activations.activations import tanh_shrink
 from keras.src.activations.activations import threshold
 from keras.src.api_export import keras_export
-from keras.src.saving import object_registration
 from keras.src.saving import serialization_lib
 
 ALL_OBJECTS = {
@@ -75,31 +72,10 @@ ALL_OBJECTS_DICT["hard_swish"] = hard_silu
 
 @keras_export("keras.activations.serialize")
 def serialize(activation):
-    fn_config = serialization_lib.serialize_keras_object(activation)
-    if "config" not in fn_config:
-        raise ValueError(
-            f"Unknown activation function '{activation}' cannot be "
-            "serialized due to invalid function name. Make sure to use "
-            "an activation name that matches the references defined in "
-            "activations.py or use "
-            "`@keras.saving.register_keras_serializable()`"
-            "to register any custom activations. "
-            f"config={fn_config}"
-        )
-    if not isinstance(activation, types.FunctionType):
-        # Case for additional custom activations represented by objects
-        return fn_config
-    if (
-        isinstance(fn_config["config"], str)
-        and fn_config["config"] not in globals()
-    ):
-        # Case for custom activation functions from external activations modules
-        fn_config["config"] = object_registration.get_registered_name(
-            activation
-        )
-        return fn_config
-    # Case for keras.activations builtins (simply return name)
-    return fn_config["config"]
+    if activation in ALL_OBJECTS:
+        # Case for keras.activations builtins (simply return name)
+        return activation.__name__
+    return serialization_lib.serialize_keras_object(activation)
 
 
 @keras_export("keras.activations.deserialize")

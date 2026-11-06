@@ -10,6 +10,8 @@ from keras.src import layers
 from keras.src import models
 from keras.src import ops
 from keras.src import testing
+from keras.src.backend.common import AutocastScope
+from keras.src.backend.common import standardize_dtype
 from keras.src.quantizers import packing
 from keras.src.quantizers import strategy_registry
 from keras.src.quantizers.gptq_config import GPTQConfig
@@ -100,6 +102,15 @@ class PackLayoutTest(testing.TestCase):
         self.assertEqual(tuple(packed.shape), (3, 3))
         self.assertEqual(layout.packed_length(11), 3)
         self.assertAllClose(layout.unpack(packed), codes)
+
+    def test_ternary_pack_inverts_unpack(self):
+        rng = np.random.default_rng(0)
+        codes = rng.integers(-1, 2, (3, 11)).astype("int8")
+        layout = TernaryTrits(axis=-1, orig_len=11)
+        packed = layout.pack(codes)
+        expected, _, _ = packing.pack_ternary(codes, axis=-1)
+        self.assertAllEqual(packed, expected)
+        self.assertAllEqual(layout.unpack(packed), codes)
 
 
 class QuantizedWeightTest(testing.TestCase):
@@ -320,7 +331,7 @@ class QuantizedWeightTest(testing.TestCase):
             shape=(4, 2),
             axis=0,
         )
-        with backend.AutocastScope("bfloat16"):
+        with AutocastScope("bfloat16"):
             codes, scale = view.read_tensors()
         self.assertDType(codes, "int8")
         self.assertDType(scale, "bfloat16")
@@ -394,7 +405,7 @@ class LayerViewTest(testing.TestCase):
         self.assertAllClose(codes, layer._kernel)
         self.assertAllClose(scale, layer.kernel_scale)
         if zero is None:
-            self.assertFalse(hasattr(layer, "kernel_zero"))
+            self.assertIsNone(layer._quantized_weight().zero_point)
         else:
             self.assertAllClose(zero, layer.kernel_zero)
 
@@ -461,9 +472,7 @@ class LayerViewTest(testing.TestCase):
         )
         self.assertIsNone(layer._quantized_weight())
         # The float kernel is still what the property exposes.
-        self.assertEqual(
-            backend.standardize_dtype(layer.kernel.dtype), "float32"
-        )
+        self.assertEqual(standardize_dtype(layer.kernel.dtype), "float32")
 
 
 class QuantizationSummaryTest(testing.TestCase):
@@ -521,14 +530,8 @@ class QuantizationSummaryTest(testing.TestCase):
     )
     def test_summary_counts_every_stored_tensor(self, policy, store):
         inputs = layers.Input([16])
-        layer = layers.Dense(8, use_bias=False, dtype=policy)
-        outputs = layer(inputs)
+        outputs = layers.Dense(8, use_bias=False, dtype=policy)(inputs)
         model = models.Model(inputs, outputs)
-        # A calibration mode holds no view until its calibration pass has
-        # run; the policy only allocates the variables.
-        mode = layer.quantization_mode
-        if mode in ("gptq", "awq"):
-            setattr(layer, f"is_{mode}_calibrated", True)
         summary = model.quantization_summary(verbose=False)
         self.assertIn(f"weight store : {store}", summary)
         self.assertIn("Quantized params : 128", summary)

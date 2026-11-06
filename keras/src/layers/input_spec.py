@@ -1,6 +1,7 @@
-from keras.src import backend
 from keras.src import tree
 from keras.src.api_export import keras_export
+from keras.src.backend.common import standardize_dtype
+from keras.src.backend.common import standardize_shape
 
 
 @keras_export(["keras.InputSpec", "keras.layers.InputSpec"])
@@ -60,11 +61,9 @@ class InputSpec:
         name=None,
         optional=False,
     ):
-        self.dtype = (
-            backend.standardize_dtype(dtype) if dtype is not None else None
-        )
+        self.dtype = standardize_dtype(dtype) if dtype is not None else None
         if shape is not None:
-            self.shape = backend.standardize_shape(shape)
+            self.shape = standardize_shape(shape)
             self.ndim = len(shape)
         else:
             self.ndim = ndim
@@ -218,7 +217,7 @@ def _check_input_spec(spec, x, input_index, layer_name):
             f"(of type {type(x)}) as input for layer '{layer_name}'."
         )
 
-    shape = backend.standardize_shape(x.shape)
+    shape = standardize_shape(x.shape)
     ndim = len(shape)
     # Check ndim.
     if spec.ndim is not None and not spec.allow_last_axis_squeeze:
@@ -248,7 +247,7 @@ def _check_input_spec(spec, x, input_index, layer_name):
             )
     # Check dtype.
     if spec.dtype is not None:
-        dtype = backend.standardize_dtype(x.dtype)
+        dtype = standardize_dtype(x.dtype)
         if dtype != spec.dtype:
             raise ValueError(
                 f"Input {input_index} with name '{spec.name}' of layer "
@@ -278,13 +277,11 @@ def _check_input_spec(spec, x, input_index, layer_name):
                 )
     # Check shape.
     if spec.shape is not None:
-        spec_shape = spec.shape
-        if spec.allow_last_axis_squeeze:
-            if shape and shape[-1] == 1:
-                shape = shape[:-1]
-            if spec_shape and spec_shape[-1] == 1:
-                spec_shape = spec_shape[:-1]
-        for spec_dim, dim in zip(spec_shape, shape):
+        # `zip` stops at the shorter shape. With `allow_last_axis_squeeze`
+        # the ranks may differ, and only the leading dimensions are
+        # compared: `Functional._adjust_input_rank` checks the rank.
+        # Otherwise the ranks match, since `spec.ndim` is checked above.
+        for spec_dim, dim in zip(spec.shape, shape):
             if spec_dim is not None and dim is not None:
                 if spec_dim != dim:
                     raise ValueError(

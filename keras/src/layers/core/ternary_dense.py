@@ -252,41 +252,11 @@ class TernaryDense(Layer):
             "ternary": ["kernel", "bias", "kernel_scale"],
         }
 
-    def _serialization_targets(self, mode):
-        return {
-            "kernel": self._kernel,
-            "bias": self.bias,
-            "kernel_scale": getattr(self, "kernel_scale", None),
-        }
-
     def save_own_variables(self, store):
-        if not self.built:
-            return
-        mode = self.quantization_mode
-        if mode not in self.variable_serialization_spec:
-            raise self._quantization_mode_error(mode)
-        targets = self._serialization_targets(mode)
-        idx = 0
-        for name in self.variable_serialization_spec[mode]:
-            if name == "bias" and self.bias is None:
-                continue
-            store[str(idx)] = targets[name]
-            idx += 1
+        self._save_serialized_variables(store, "kernel")
 
     def load_own_variables(self, store):
-        self._check_load_own_variables(store)
-        if not self.built:
-            return
-        mode = self.quantization_mode
-        if mode not in self.variable_serialization_spec:
-            raise self._quantization_mode_error(mode)
-        targets = self._serialization_targets(mode)
-        idx = 0
-        for name in self.variable_serialization_spec[mode]:
-            if name == "bias" and self.bias is None:
-                continue
-            targets[name].assign(store[str(idx)])
-            idx += 1
+        self._load_serialized_variables(store, "kernel")
 
     def compute_output_shape(self, input_shape):
         output_shape = list(input_shape)

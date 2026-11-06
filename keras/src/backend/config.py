@@ -1,5 +1,6 @@
 import json
 import os
+import warnings
 
 from keras.src.api_export import keras_export
 
@@ -29,6 +30,12 @@ _MAX_STEPS_PER_EPOCH = None
 # This flag forces Keras to use backend-agnostic ops even if there is
 # backend-specific implementation available.
 _USE_BACKEND_AGNOSTIC_OPS = False
+
+# How Keras handles 64-bit dtypes, see `set_x64_mode()`.
+_X64_MODE = "off"
+_X64_MODES = ("off", "explicit_x64", "enable_x64")
+# TODO: Add mlx and paddle, and let pluggable backends declare support.
+_X64_BACKENDS = frozenset(["jax", "numpy", "torch"])
 
 
 @keras_export(["keras.config.floatx", "keras.backend.floatx"])
@@ -84,6 +91,116 @@ def set_floatx(value):
             f"Expected one of {accepted_dtypes}"
         )
     _FLOATX = str(value)
+
+
+@keras_export("keras.config.x64_mode")
+def x64_mode():
+    """Returns how Keras handles 64-bit dtypes, as a string.
+
+    One of `"off"`, `"explicit_x64"` or `"enable_x64"`, see
+    `keras.config.set_x64_mode()`.
+
+    Example:
+
+    >>> keras.config.x64_mode()
+    'off'
+
+    """
+    return _X64_MODE
+
+
+@keras_export("keras.config.set_x64_mode")
+def set_x64_mode(mode):
+    """Sets how Keras handles 64-bit dtypes.
+
+    64-bit dtypes are `int64`, `uint64`, `float64` and `complex128`.
+
+    Args:
+        mode: One of:
+            - `"off"` (default): the result dtype of every op is capped to
+              32-bit, e.g. adding two `int64` tensors gives an `int32` tensor.
+            - `"explicit_x64"`: a 64-bit input gives a 64-bit output. Inputs
+              that are all 32-bit, Python scalars and default dtypes stay
+              32-bit. This mirrors JAX's `jax_explicit_x64_dtypes="allow"`,
+              which Keras turns on for you on the JAX backend.
+            - `"enable_x64"`: not supported yet.
+
+    The mode can also be set with the `KERAS_X64_MODE` environment variable
+    or the `"x64_mode"` field of `~/.keras/keras.json`. Set it before
+    creating tensors or models. Supported on the `jax`, `numpy` and `torch`
+    backends. On the JAX backend, Keras turns on the matching JAX flag. If
+    JAX's own 64-bit flags are already on and don't match `mode`, Keras
+    warns and keeps `mode`.
+
+    Example:
+
+    >>> keras.config.set_x64_mode("explicit_x64")
+    >>> x = keras.ops.ones((2,), dtype="int64")
+    >>> keras.ops.add(x, x).dtype
+    'int64'
+
+    Raises:
+        ValueError: If `mode` is unknown, not supported yet, or not supported
+            on the current backend.
+    """
+    global _X64_MODE
+    _validate_x64_mode(mode)
+    if backend() == "jax":
+        _reconcile_jax_x64_options(mode)
+    _X64_MODE = mode
+
+
+def _validate_x64_mode(mode):
+    """Raises if `mode` is unknown or unsupported (yet, or on this backend)."""
+    if mode not in _X64_MODES:
+        raise ValueError(
+            f"Unknown `x64_mode`: {mode!r}. Expected one of {_X64_MODES}."
+        )
+    if mode == "enable_x64":
+        raise ValueError(
+            "`x64_mode='enable_x64'` is not supported yet. Use 'explicit_x64'."
+        )
+    if mode != "off" and backend() not in _X64_BACKENDS:
+        raise ValueError(
+            f"`x64_mode={mode!r}` is not supported on the {backend()} "
+            f"backend yet. Supported backends: {sorted(_X64_BACKENDS)}."
+        )
+
+
+def _reconcile_jax_x64_options(mode):
+    """Puts JAX's 64-bit flags in `mode`, or warns if they disagree with it.
+
+    Nothing changes if the flags already match `mode`. If they are off, the
+    flag for `mode` is turned on. Otherwise the user set them to another
+    mode, which Keras does not override.
+    """
+    import jax
+
+    explicit = getattr(jax.config, "jax_explicit_x64_dtypes", None)
+    if jax.config.jax_enable_x64:
+        jax_mode, flag = "enable_x64", "`jax.config.jax_enable_x64` is True"
+    elif getattr(explicit, "name", None) == "ALLOW":
+        jax_mode = "explicit_x64"
+        flag = "`jax.config.jax_explicit_x64_dtypes` is 'allow'"
+    else:
+        jax_mode, flag = "off", None
+    if jax_mode == mode:
+        return
+    if flag:
+        warnings.warn(
+            f"{flag}, which does not match Keras's `x64_mode={mode!r}`. "
+            "It is recommended to set JAX's 64-bit flags through Keras's "
+            "`x64_mode` rather than directly. Otherwise, make sure JAX and "
+            "Keras have matching 64-bit behavior."
+        )
+        return
+    # Only "explicit_x64" gets here until "enable_x64" is supported.
+    if explicit is None:
+        raise ValueError(
+            "`x64_mode='explicit_x64'` requires JAX 0.8.0 or newer, which "
+            f"adds `jax_explicit_x64_dtypes`. Found JAX {jax.__version__}."
+        )
+    jax.config.update("jax_explicit_x64_dtypes", "allow")
 
 
 @keras_export(["keras.config.epsilon", "keras.backend.epsilon"])
@@ -327,10 +444,12 @@ if os.path.exists(_config_path):
             f"Received: image_data_format={_image_data_format}"
         )
     _nnx_enabled_config = _config.get("nnx_enabled", _NNX_ENABLED)
+    _x64_mode_config = _config.get("x64_mode", _X64_MODE)
 
     # Apply basic configs that don't cause circular import
     set_floatx(_floatx)
     _NNX_ENABLED = _nnx_enabled_config
+    _X64_MODE = _x64_mode_config
     set_epsilon(_epsilon)
     set_image_data_format(_image_data_format)
     _BACKEND = _backend
@@ -469,6 +588,11 @@ if "KERAS_NNX_ENABLED" in os.environ:
         _NNX_ENABLED = False
 
 set_nnx_enabled(_NNX_ENABLED)
+
+if os.environ.get("KERAS_X64_MODE"):
+    _X64_MODE = os.environ["KERAS_X64_MODE"]
+
+set_x64_mode(_X64_MODE)  # Validates the configured mode and syncs JAX.
 
 if "KERAS_USE_BACKEND_AGNOSTIC_OPS" in os.environ:
     env_val = os.environ["KERAS_USE_BACKEND_AGNOSTIC_OPS"].lower()

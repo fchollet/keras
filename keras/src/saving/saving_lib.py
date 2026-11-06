@@ -16,6 +16,7 @@ import numpy as np
 
 from keras.src import backend
 from keras.src.backend.common import global_state
+from keras.src.backend.common import standardize_dtype
 from keras.src.saving.serialization_lib import ObjectSharingScope
 from keras.src.saving.serialization_lib import deserialize_keras_object
 from keras.src.saving.serialization_lib import serialize_keras_object
@@ -161,6 +162,8 @@ def _save_model_to_dir(model, dirpath):
         f.write(config_json)
     weights_filepath = file_utils.join(dirpath, _VARS_FNAME_H5)
     assert_dirpath = file_utils.join(dirpath, _ASSETS_DIRNAME)
+    weights_store = None
+    asset_store = None
     try:
         weights_store = H5IOStore(weights_filepath, mode="w")
         asset_store = DiskIOStore(assert_dirpath, mode="w")
@@ -172,8 +175,10 @@ def _save_model_to_dir(model, dirpath):
             visited_saveables=set(),
         )
     finally:
-        weights_store.close()
-        asset_store.close()
+        if weights_store is not None:
+            weights_store.close()
+        if asset_store is not None:
+            asset_store.close()
 
 
 def _save_model_to_fileobj(model, fileobj):
@@ -333,7 +338,7 @@ def load_model(filepath, custom_objects=None, compile=True, safe_mode=True):
                 "Invalid filename: expected a `.keras` extension. "
                 f"Received: filepath={filepath}"
             )
-        with open(filepath, "rb") as f:
+        with file_utils.File(filepath, "rb") as f:
             return _load_model_from_fileobj(
                 f, custom_objects, compile, safe_mode
             )
@@ -1436,7 +1441,7 @@ class H5IOStore:
             self._create_h5_group(self._h5_entry_path)
 
         value = backend.ops.convert_to_numpy(value)
-        if backend.standardize_dtype(value.dtype) == "bfloat16":
+        if standardize_dtype(value.dtype) == "bfloat16":
             ds = self._h5_entry_group.create_dataset(key, data=value)
             ds.attrs["dtype"] = "bfloat16"
         else:
@@ -1710,7 +1715,7 @@ class ShardedH5IOStore(H5IOStore):
 
         # Accumulate `current_shard_size`.
         value = backend.ops.convert_to_numpy(value)
-        dtype = backend.standardize_dtype(value.dtype)
+        dtype = standardize_dtype(value.dtype)
         weight_counts = math.prod(value.shape)
         per_param_size = dtype_utils.dtype_size(dtype)
         value_size = weight_counts * per_param_size / 8  # In bytes.

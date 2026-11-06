@@ -8,7 +8,7 @@ import numpy as np
 from keras.src import backend
 from keras.src import tree
 from keras.src.api_export import keras_export
-from keras.src.backend.common.variables import is_float_dtype
+from keras.src.backend.common import is_float_dtype
 from keras.src.backend.common.variables import standardize_dtype
 from keras.src.layers.layer import Layer
 from keras.src.random.seed_generator import draw_seed
@@ -409,6 +409,9 @@ class JaxLayer(Layer):
         structures like `TrackedList` interfere with `jax.tree_utils`.
         Note that leaf objects that are not JAX arrays and not tensor-like are
         left intact as they are assumed to be configuration used by the model.
+        Leaves that are already `keras.Variable` instances are used as-is
+        rather than copied, so that their initialization and identity are
+        preserved.
 
         Args:
             values: the structure of values to traverse.
@@ -418,8 +421,13 @@ class JaxLayer(Layer):
             flat list of variables initialized with `values` for tracking.
         """
 
+        def is_variable(x):
+            return isinstance(x, backend.Variable)
+
         def create_variable(value):
-            if backend.ops.is_tensor(value) or isinstance(
+            if isinstance(value, backend.Variable):
+                return value
+            elif backend.ops.is_tensor(value) or isinstance(
                 value, (np.ndarray, np.generic, jax.Array)
             ):
                 dtype = value.dtype
@@ -444,15 +452,20 @@ class JaxLayer(Layer):
             else:
                 return value
 
-        # Use JAX's tree_map as it understands registered classes.
-        variables = jax.tree_util.tree_map(create_variable, values)
+        # Use JAX's tree_map as it understands registered classes, while
+        # keeping `keras.Variable` instances as leaves (e.g. under NNX).
+        variables = jax.tree_util.tree_map(
+            create_variable, values, is_leaf=is_variable
+        )
 
         if trainable:
             self.params = variables
         else:
             self.state = variables
 
-        flat_variables, _ = jax.tree_util.tree_flatten(variables)
+        flat_variables, _ = jax.tree_util.tree_flatten(
+            variables, is_leaf=is_variable
+        )
         return flat_variables
 
     def _get_init_seed(self):
@@ -594,6 +607,9 @@ class JaxLayer(Layer):
             super().build(input_shape)
 
     def call(self, inputs, training=False):
+        def is_variable_or_none(x):
+            return x is None or isinstance(x, backend.Variable)
+
         def unwrap_variable(variable):
             return None if variable is None else variable.value
 
@@ -601,11 +617,19 @@ class JaxLayer(Layer):
         for argument_name in self.call_fn_arguments:
             if argument_name == "params":
                 call_args.append(
-                    jax.tree_util.tree_map(unwrap_variable, self.params)
+                    jax.tree_util.tree_map(
+                        unwrap_variable,
+                        self.params,
+                        is_leaf=is_variable_or_none,
+                    )
                 )
             elif argument_name == "state":
                 call_args.append(
-                    jax.tree_util.tree_map(unwrap_variable, self.state)
+                    jax.tree_util.tree_map(
+                        unwrap_variable,
+                        self.state,
+                        is_leaf=is_variable_or_none,
+                    )
                 )
             elif argument_name == "rng":
                 call_args.append(

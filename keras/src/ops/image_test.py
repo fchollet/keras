@@ -11,6 +11,7 @@ from keras.src import backend
 from keras.src import random as krandom
 from keras.src import testing
 from keras.src.backend.common import dtypes
+from keras.src.backend.common import standardize_dtype
 from keras.src.backend.common.keras_tensor import KerasTensor
 from keras.src.ops import image as kimage
 from keras.src.ops import numpy as knp
@@ -1236,9 +1237,9 @@ def gaussian_blur_np(
             return kernel1d / np.sum(kernel1d)
 
         def _get_gaussian_kernel2d(size, sigma):
-            kernel1d_x = _get_gaussian_kernel1d(size[0], sigma[0])
-            kernel1d_y = _get_gaussian_kernel1d(size[1], sigma[1])
-            return np.outer(kernel1d_y, kernel1d_x)
+            kernel1d_height = _get_gaussian_kernel1d(size[0], sigma[0])
+            kernel1d_width = _get_gaussian_kernel1d(size[1], sigma[1])
+            return np.outer(kernel1d_height, kernel1d_width)
 
         kernel = _get_gaussian_kernel2d(kernel_size, sigma)
         kernel = kernel[:, :, np.newaxis]
@@ -1805,7 +1806,7 @@ class ImageOpsCorrectnessTest(testing.TestCase):
             expected = "float64"
             if backend.backend() == "jax" and not jax.config.jax_enable_x64:
                 expected = "float32"
-            self.assertEqual(backend.standardize_dtype(out.dtype), expected)
+            self.assertEqual(standardize_dtype(out.dtype), expected)
 
             ref_out = tf.image.resize(
                 x,
@@ -1824,7 +1825,7 @@ class ImageOpsCorrectnessTest(testing.TestCase):
                 interpolation=interpolation,
                 antialias=antialias,
             )
-            self.assertEqual(backend.standardize_dtype(out.dtype), dtype)
+            self.assertEqual(standardize_dtype(out.dtype), dtype)
 
             ref_x = x.astype("float32")
             ref_out = tf.image.resize(
@@ -1873,7 +1874,7 @@ class ImageOpsCorrectnessTest(testing.TestCase):
             antialias=False,
         )
         self.assertEqual(tuple(out.shape), tuple(expected.shape))
-        self.assertEqual(backend.standardize_dtype(out.dtype), "uint8")
+        self.assertEqual(standardize_dtype(out.dtype), "uint8")
         self.assertAllClose(out, expected, atol=1e-4)
 
     def test_resize_uint8_round_saturate(self):
@@ -1915,7 +1916,7 @@ class ImageOpsCorrectnessTest(testing.TestCase):
             antialias=False,
         )
         self.assertEqual(tuple(out.shape), tuple(expected.shape))
-        self.assertEqual(backend.standardize_dtype(out.dtype), "uint8")
+        self.assertEqual(standardize_dtype(out.dtype), "uint8")
         self.assertAllClose(out, expected, atol=1e-4)
 
     def test_resize_with_crop(self):
@@ -2042,7 +2043,7 @@ class ImageOpsCorrectnessTest(testing.TestCase):
             fill_value=fill_value,
         )
         self.assertEqual(out.shape, (2, 15, 15, 3))
-        self.assertEqual(backend.standardize_dtype(out.dtype), dtype)
+        self.assertEqual(standardize_dtype(out.dtype), dtype)
 
         # 3D unbatched input
         x_3d = np.random.randint(0, 255, size=(60, 30, 3), dtype=dtype)
@@ -2053,7 +2054,7 @@ class ImageOpsCorrectnessTest(testing.TestCase):
             fill_value=fill_value,
         )
         self.assertEqual(out_3d.shape, (15, 15, 3))
-        self.assertEqual(backend.standardize_dtype(out_3d.dtype), dtype)
+        self.assertEqual(standardize_dtype(out_3d.dtype), dtype)
 
     @parameterized.named_parameters(
         ("zero_height", (0, 10)),
@@ -2514,6 +2515,20 @@ class ImageOpsCorrectnessTest(testing.TestCase):
         self.assertEqual(tuple(out.shape), tuple(ref_out.shape))
         self.assertAllClose(out, ref_out, atol=1e-2, rtol=1e-2)
 
+        # Test batch with one set of points
+        backend.set_image_data_format("channels_last")
+        x = np.random.uniform(size=(2, 20, 20, 3)).astype("float32")
+        start_points = np.random.uniform(size=(4, 2)).astype("float32")
+        end_points = np.random.uniform(size=(4, 2)).astype("float32")
+
+        out = kimage.perspective_transform(
+            x, start_points, end_points, interpolation=interpolation
+        )
+        ref_out = _perspective_transform_numpy(
+            x, start_points, end_points, interpolation=interpolation
+        )
+        self.assertAllClose(out, ref_out, atol=1e-2, rtol=1e-2)
+
     def test_perspective_transform_bfloat16_no_crash(self):
         images = np.ones((10, 10, 3), dtype="bfloat16")
         start_points = np.array(
@@ -2543,7 +2558,7 @@ class ImageOpsCorrectnessTest(testing.TestCase):
             images, start_points, end_points, interpolation="bilinear"
         )
         self.assertEqual(tuple(out.shape), tuple(images.shape))
-        self.assertEqual(backend.standardize_dtype(out.dtype), "bfloat16")
+        self.assertEqual(standardize_dtype(out.dtype), "bfloat16")
 
     def test_gaussian_blur(self):
         # Test channels_last
@@ -2592,6 +2607,62 @@ class ImageOpsCorrectnessTest(testing.TestCase):
 
         self.assertEqual(tuple(out.shape), tuple(ref_out.shape))
         self.assertAllClose(out, ref_out, atol=1e-2, rtol=1e-2)
+
+    def test_gaussian_blur_asymmetric_kernel(self):
+        image = np.zeros((9, 11, 1), dtype="float32")
+        image[4, 5, 0] = 1.0
+        kernel_size = (3, 5)
+        sigma = (0.5, 2.0)
+
+        def normalized_kernel(size, standard_deviation):
+            positions = np.arange(size) - (size - 1) / 2
+            values = np.exp(-0.5 * (positions / standard_deviation) ** 2)
+            return values / np.sum(values)
+
+        expected = np.zeros_like(image)
+        expected[3:6, 3:8, 0] = np.outer(
+            normalized_kernel(kernel_size[0], sigma[0]),
+            normalized_kernel(kernel_size[1], sigma[1]),
+        )
+
+        for data_format in ("channels_last", "channels_first"):
+            input_image = (
+                image
+                if data_format == "channels_last"
+                else np.transpose(image, (2, 0, 1))
+            )
+            expected_image = (
+                expected
+                if data_format == "channels_last"
+                else np.transpose(expected, (2, 0, 1))
+            )
+            out = kimage.gaussian_blur(
+                input_image,
+                kernel_size=kernel_size,
+                sigma=sigma,
+                data_format=data_format,
+            )
+            self.assertEqual(tuple(out.shape), tuple(input_image.shape))
+            self.assertAllClose(
+                out,
+                expected_image,
+                atol=1e-6,
+                rtol=1e-6,
+                tpu_atol=1e-2,
+                tpu_rtol=1e-2,
+            )
+
+    def test_gaussian_blur_even_rectangular_kernel(self):
+        image = (np.arange(9 * 11, dtype="float32").reshape(9, 11, 1) / 13) ** 2
+        kernel_size = (4, 2)
+        sigma = (1.0, 0.7)
+        out = kimage.gaussian_blur(image, kernel_size, sigma)
+        expected = gaussian_blur_np(image, kernel_size, sigma)
+
+        self.assertEqual(tuple(out.shape), tuple(image.shape))
+        self.assertAllClose(
+            out, expected, atol=5e-5, rtol=1e-5, tpu_atol=1e-2, tpu_rtol=1e-2
+        )
 
     def test_gaussian_blur_even_kernel_size(self):
         """Test gaussian_blur with even kernel sizes"""
@@ -2749,6 +2820,18 @@ class ImageOpsCorrectnessTest(testing.TestCase):
             np.mean(out), np.mean(ref_out), atol=1e-2, rtol=1e-2
         )
         self.assertAllClose(np.var(out), np.var(ref_out), atol=1e-2, rtol=1e-2)
+
+    def test_map_coordinates_mirror_size_one_axis(self):
+        if backend.backend() == "tensorflow":
+            self.skipTest("tensorflow `mirror` fails on a size 1 axis")
+        input = np.array([[5.0]], dtype="float32")
+        coordinates = [
+            np.array([-1.5, 0.3, 2.0], dtype="float32"),
+            np.array([0.7, -2.2, 1.5], dtype="float32"),
+        ]
+        output = kimage.map_coordinates(input, coordinates, 1, "mirror")
+        expected = _fixed_map_coordinates(input, coordinates, 1, "mirror")
+        self.assertAllClose(output, expected)
 
     def test_map_coordinates_constant_padding(self):
         input_img = tf.ones((2, 2), dtype=tf.uint8)
@@ -2960,7 +3043,7 @@ class ImageOpsCorrectnessTest(testing.TestCase):
         out = kimage.reconstruct_patches(
             patches, size=(4, 4), output_size=(8, 8)
         )
-        self.assertEqual(backend.standardize_dtype(out.dtype), "int32")
+        self.assertEqual(standardize_dtype(out.dtype), "int32")
         self.assertAllClose(out, x)
 
 

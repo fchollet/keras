@@ -128,14 +128,6 @@ def initialize(job_addresses=None, num_processes=None, process_id=None):
             backend=backend, rank=rank, world_size=world_size
         )
 
-        if torch_core._GLOBAL_DTENSOR_PROMOTION_MODE is None:
-            torch_core._GLOBAL_DTENSOR_PROMOTION_MODE = (
-                torch_core.KerasDTensorPromotionMode()
-            )
-            # We don't automatically enter the mode globally anymore,
-            # to avoid interfering with torch.compile.
-            # Instead, it's entered in Distribution.scope().
-
 
 def activate_dtensor_promotion():
     torch_core.activate_dtensor_promotion()
@@ -232,7 +224,7 @@ def _to_backend_layout(tensor_layout):
             "the 'device_mesh' is not specified. Please ensure the layout "
             "has a valid 'device_mesh'."
         )
-    torch_mesh = _to_backend_mesh(keras_mesh)
+    torch_mesh = keras_mesh.backend_mesh
 
     mesh_axis_to_tensor_dim = {}
     valid_axis_names = set(keras_mesh.axis_names)
@@ -278,6 +270,10 @@ def distribute_tensor(tensor, layout):
             and tensor.placements == layout.placements
         ):
             return tensor
+        # `torch.distributed.tensor.distribute_tensor` rejects a DTensor with
+        # a different layout, e.g. a `Partial` gradient or a value computed
+        # from differently sharded operands.
+        return tensor.redistribute(layout.device_mesh, layout.placements)
 
     if not isinstance(tensor, torch.Tensor):
         tensor = convert_to_tensor(tensor)

@@ -214,8 +214,13 @@ class BaseOptimizer(KerasSaveable):
             )
         if self.gradient_accumulation_steps:
             self._accumulated_gradients = []
+        # Decide here which variables get weight decay. Train steps only read
+        # this dict, so a compiled train step (torch Dynamo) never sees it
+        # change and does not recompile.
+        self._weight_decay_by_var_key = {}
         for i, variable in enumerate(variables):
-            self._trainable_variables_indices[self._var_key(variable)] = i
+            var_key = self._var_key(variable)
+            self._trainable_variables_indices[var_key] = i
             if self.gradient_accumulation_steps:
                 self._accumulated_gradients.append(
                     self.add_variable_from_reference(
@@ -223,6 +228,10 @@ class BaseOptimizer(KerasSaveable):
                         name="gradient_accumulator",
                     )
                 )
+            # Fill it even when `weight_decay` is None: `Muon` also uses it
+            # to apply `adam_weight_decay`.
+            excluded = self._is_excluded_from_weight_decay(variable)
+            self._weight_decay_by_var_key[var_key] = not excluded
         self._trainable_variables = variables[:]
         self.built = True
 
@@ -892,7 +901,7 @@ class BaseOptimizer(KerasSaveable):
                 excluded from weight decay. For example, `var_names=['bias']`
                 excludes all bias variables from weight decay.
         """
-        if hasattr(self, "_built") and self._built:
+        if self.built:
             raise ValueError(
                 "`exclude_from_weight_decay()` can only be configured before "
                 "the optimizer is built."
@@ -914,37 +923,30 @@ class BaseOptimizer(KerasSaveable):
         else:
             self._exclude_from_weight_decay_pattern = None
 
-        # Reset cache
-        self._exclude_from_weight_decay_cache = dict()
-
-    def _use_weight_decay(self, variable):
-        variable_id = self._var_key(variable)
-
-        # Immediately return the value if `variable_id` hits the cache
-        if not hasattr(self, "_exclude_from_weight_decay_cache"):
-            self._exclude_from_weight_decay_cache = dict()
-        if variable_id in self._exclude_from_weight_decay_cache:
-            return self._exclude_from_weight_decay_cache[variable_id]
-
-        # Determine whether the variable should apply weight decay or not
+    def _is_excluded_from_weight_decay(self, variable):
         exclude_from_weight_decay = getattr(
             self, "_exclude_from_weight_decay", set()
         )
         exclude_from_weight_decay_pattern = getattr(
             self, "_exclude_from_weight_decay_pattern", None
         )
-        if variable_id in exclude_from_weight_decay:
-            self._exclude_from_weight_decay_cache[variable_id] = False
-            return False
+        if self._var_key(variable) in exclude_from_weight_decay:
+            return True
         if exclude_from_weight_decay_pattern is not None:
             if (
                 re.search(exclude_from_weight_decay_pattern, variable.name)
                 is not None
             ):
-                self._exclude_from_weight_decay_cache[variable_id] = False
-                return False
-        self._exclude_from_weight_decay_cache[variable_id] = True
-        return True
+                return True
+        return False
+
+    def _use_weight_decay(self, variable):
+        if not self.built:
+            raise ValueError(
+                "The optimizer must be built before `_use_weight_decay()` "
+                "is called."
+            )
+        return self._weight_decay_by_var_key[self._var_key(variable)]
 
     def _apply_weight_decay(self, variables):
         if self.weight_decay is None:

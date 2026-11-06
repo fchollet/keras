@@ -75,3 +75,21 @@ class MaxNumBoundingBoxesTest(testing.TestCase):
         output = next(iter(ds))
         self.assertEqual(output["bounding_boxes"]["boxes"].shape, (1, 40, 4))
         self.assertEqual(output["bounding_boxes"]["labels"].shape, (1, 40))
+
+    def test_fill_value_in_config(self):
+        layer = layers.MaxNumBoundingBoxes(
+            max_number=4, fill_value=0, bounding_box_format="xyxy"
+        )
+        revived = layers.MaxNumBoundingBoxes.from_config(layer.get_config())
+        self.assertEqual(revived.fill_value, 0)
+
+        bounding_boxes = {
+            "boxes": np.array([[[1, 1, 2, 2]]]),
+            "labels": np.array([[5]]),
+        }
+        output = revived(
+            {"images": np.zeros((1, 8, 8, 3)), "bounding_boxes": bounding_boxes}
+        )
+        self.assertAllClose(
+            output["bounding_boxes"]["labels"], np.array([[5, 0, 0, 0]])
+        )

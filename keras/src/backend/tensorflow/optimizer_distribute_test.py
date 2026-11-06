@@ -81,21 +81,23 @@ class OptimizerDistributeTest(testing.TestCase):
                 lambda: optimizer_1.apply_gradients(zip([grads], [var1]))
             )
 
+            # `exclude_from_weight_decay` must run before the optimizer is
+            # built, so call it once, outside of `strategy.run`.
             optimizer_2 = SGD(learning_rate=1.0, weight_decay=0.004)
-
-            def opt2_run():
-                optimizer_2.exclude_from_weight_decay(var_names=["exclude"])
-                optimizer_2.apply_gradients(zip([grads, grads], [var1, var2]))
-
-            self.strategy.run(opt2_run)
+            optimizer_2.exclude_from_weight_decay(var_names=["exclude"])
+            self.strategy.run(
+                lambda: optimizer_2.apply_gradients(
+                    zip([grads, grads], [var1, var2])
+                )
+            )
 
             optimizer_3 = SGD(learning_rate=1.0, weight_decay=0.004)
-
-            def opt3_run():
-                optimizer_3.exclude_from_weight_decay(var_list=[var3])
-                optimizer_3.apply_gradients(zip([grads, grads], [var1, var3]))
-
-            self.strategy.run(opt3_run)
+            optimizer_3.exclude_from_weight_decay(var_list=[var3])
+            self.strategy.run(
+                lambda: optimizer_3.apply_gradients(
+                    zip([grads, grads], [var1, var3])
+                )
+            )
 
         self.assertAlmostEqual(var1.numpy(), 1.9760959)
         self.assertAlmostEqual(var2.numpy(), 3.0)

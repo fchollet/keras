@@ -54,7 +54,7 @@ def _dot_product_attention(
 
     def _apply_masks(logits, mask, is_causal):
         def _get_large_negative(dtype):
-            dtype = backend.standardize_dtype(dtype)
+            dtype = standardize_dtype(dtype)
             if dtype == "float16":
                 val = 65500.0
             else:
@@ -441,7 +441,7 @@ class NNOpsDynamicShapeTest(testing.TestCase):
 
         x = np.arange(5)
         out = knn.multi_hot(x, 5, axis=0, dtype=dtype, sparse=sparse)
-        self.assertEqual(backend.standardize_dtype(out.dtype), dtype)
+        self.assertEqual(standardize_dtype(out.dtype), dtype)
         self.assertSparse(out, sparse)
 
     def test_conv(self):
@@ -801,7 +801,7 @@ class NNOpsDynamicShapeTest(testing.TestCase):
 
         x = np.arange(5)
         out = knn.one_hot(x, 5, axis=0, dtype=dtype, sparse=sparse)
-        self.assertEqual(backend.standardize_dtype(out.dtype), dtype)
+        self.assertEqual(standardize_dtype(out.dtype), dtype)
         self.assertSparse(out, sparse)
 
     def test_moments(self):
@@ -1877,9 +1877,7 @@ class NNOpsCorrectnessTest(testing.TestCase):
             KerasTensor((2,), dtype="float32"),
             KerasTensor((2,), dtype="float32"),
         )
-        self.assertEqual(
-            backend.standardize_dtype(out.dtype), symbolic_out.dtype
-        )
+        self.assertEqual(standardize_dtype(out.dtype), symbolic_out.dtype)
 
     def test_sparsemax(self):
         x = np.array([-0.5, 0, 1, 2, 3], dtype=np.float32)
@@ -2611,7 +2609,7 @@ class NNOpsCorrectnessTest(testing.TestCase):
         expected = -(t * np.log(probs) + (1 - t) * np.log(1 - probs))
         tol = {"float32": 1e-6, "float16": 1e-3, "bfloat16": 1e-2}[output_dtype]
         self.assertAllClose(result, expected, atol=tol, rtol=tol)
-        self.assertEqual(backend.standardize_dtype(result.dtype), output_dtype)
+        self.assertEqual(standardize_dtype(result.dtype), output_dtype)
 
     @parameterized.parameters(
         ("int32", True), ("int32", False), ("uint8", False), ("bool", False)
@@ -2647,7 +2645,7 @@ class NNOpsCorrectnessTest(testing.TestCase):
         result = knn.binary_crossentropy(
             target, output, from_logits=from_logits
         )
-        self.assertEqual(backend.standardize_dtype(result.dtype), output_dtype)
+        self.assertEqual(standardize_dtype(result.dtype), output_dtype)
 
     def test_categorical_crossentropy(self):
         target = np.array(
@@ -3063,6 +3061,54 @@ class NNOpsCorrectnessTest(testing.TestCase):
         psnr_2 = knn.psnr(x3, x4, max_val)
         self.assertAlmostEqual(psnr_2, expected_psnr_2)
 
+    def _skip_if_flash_attention_unsupported(self, bias, mask):
+        if backend.backend() in ("tensorflow", "numpy"):
+            self.skipTest(
+                "Flash attention is not supported in tensorflow and numpy "
+                "backends."
+            )
+        elif backend.backend() == "torch":
+            import torch
+
+            if bias is not None:
+                self.skipTest(
+                    "Flash attention doesn't support `bias` in torch backend."
+                )
+            if mask is not None:
+                self.skipTest(
+                    "Flash attention doesn't support custom masks in torch "
+                    "backend."
+                )
+            if not torch.cuda.is_available():
+                self.skipTest(
+                    "Flash attention must be run on CUDA in torch backend."
+                )
+            cuda_compute_capability = tuple(
+                int(x) for x in torch.cuda.get_device_capability()
+            )
+            if cuda_compute_capability < (8, 0):
+                self.skipTest(
+                    "Flash attention must be run on CUDA compute "
+                    "capability >= 8.0 in torch backend."
+                )
+        elif backend.backend() == "jax":
+            import jax
+            from jax._src import xla_bridge
+
+            if "cuda" not in xla_bridge.get_backend().platform_version:
+                self.skipTest(
+                    "Flash attention must be run on CUDA in jax backend."
+                )
+            d, *_ = jax.local_devices(backend="gpu")
+            cuda_compute_capability = tuple(
+                int(x) for x in d.compute_capability.split(".")
+            )
+            if cuda_compute_capability < (8, 0):
+                self.skipTest(
+                    "Flash attention must be run on CUDA compute "
+                    "capability >= 8.0 in jax backend."
+                )
+
     @parameterized.named_parameters(
         named_product(
             bias=(None, True),
@@ -3098,53 +3144,7 @@ class NNOpsCorrectnessTest(testing.TestCase):
             )
 
         if flash_attention:
-            if backend.backend() in ("tensorflow", "numpy"):
-                self.skipTest(
-                    "Flash attention is not supported in tensorflow and numpy "
-                    "backends."
-                )
-            elif backend.backend() == "torch":
-                import torch
-
-                if bias is not None:
-                    self.skipTest(
-                        "Flash attention doesn't support `bias` in torch "
-                        "backend."
-                    )
-                if mask is not None:
-                    self.skipTest(
-                        "Flash attention doesn't support `mask=None` in torch "
-                        "backend."
-                    )
-                if not torch.cuda.is_available():
-                    self.skipTest(
-                        "Flash attention must be run on CUDA in torch backend."
-                    )
-                cuda_compute_capability = tuple(
-                    int(x) for x in torch.cuda.get_device_capability()
-                )
-                if cuda_compute_capability < (8, 0):
-                    self.skipTest(
-                        "Flash attention must be run on CUDA compute "
-                        "capability >= 8.0 in torch backend."
-                    )
-            elif backend.backend() == "jax":
-                import jax
-                from jax._src import xla_bridge
-
-                if "cuda" not in xla_bridge.get_backend().platform_version:
-                    self.skipTest(
-                        "Flash attention must be run on CUDA in jax backend."
-                    )
-                d, *_ = jax.local_devices(backend="gpu")
-                cuda_compute_capability = tuple(
-                    int(x) for x in d.compute_capability.split(".")
-                )
-                if cuda_compute_capability < (8, 0):
-                    self.skipTest(
-                        "Flash attention must be run on CUDA compute "
-                        "capability >= 8.0 in jax backend."
-                    )
+            self._skip_if_flash_attention_unsupported(bias, mask)
 
             # Flash attention only supports float16 and bfloat16. We multiply
             # 0.1 to avoid overflow.
@@ -3176,6 +3176,37 @@ class NNOpsCorrectnessTest(testing.TestCase):
         )
         self.assertAllClose(
             outputs, expected, atol=1e-3 if flash_attention else 1e-6
+        )
+
+    @parameterized.named_parameters(
+        named_product(flash_attention=(False, True))
+    )
+    def test_dot_product_attention_causal_different_lengths(
+        self, flash_attention
+    ):
+        if flash_attention:
+            self._skip_if_flash_attention_unsupported(None, None)
+        dtype = "float16" if flash_attention else "float32"
+        rng = np.random.RandomState(0)
+        query = rng.uniform(size=(2, 2, 4, 8)).astype(dtype)
+        key = rng.uniform(size=(2, 5, 4, 8)).astype(dtype)
+        value = rng.uniform(size=(2, 5, 4, 8)).astype(dtype)
+        # The causal mask is aligned to the top left, query `i` sees keys
+        # `0..i`.
+        outputs = knn.dot_product_attention(
+            query,
+            key,
+            value,
+            is_causal=True,
+            flash_attention=flash_attention,
+        )
+        expected = _dot_product_attention(query, key, value, is_causal=True)
+        self.assertAllClose(
+            outputs,
+            expected,
+            atol=1e-3 if flash_attention else 1e-6,
+            tpu_atol=1e-2,
+            tpu_rtol=1e-2,
         )
 
     @parameterized.named_parameters(named_product(scale=(1.0, 10.0)))

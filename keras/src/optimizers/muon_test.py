@@ -88,6 +88,7 @@ class MuonTest(testing.TestCase):
         weight_decay = 0.01
         expected_variable = variable - variable * weight_decay
         optimizer = Muon(learning_rate=1.0, weight_decay=weight_decay)
+        optimizer.build([variable])
         optimizer._apply_weight_decay([variable])
         self.assertAllClose(variable, expected_variable, rtol=1e-4, atol=1e-4)
 
@@ -96,6 +97,7 @@ class MuonTest(testing.TestCase):
         weight_decay = 0.01
         expected_variable = variable - variable * weight_decay
         optimizer = Muon(learning_rate=1.0, adam_weight_decay=weight_decay)
+        optimizer.build([variable])
         optimizer._apply_weight_decay([variable])
 
         self.assertAllClose(variable, expected_variable, rtol=1e-4, atol=1e-4)

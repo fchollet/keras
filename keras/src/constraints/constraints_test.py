@@ -50,7 +50,7 @@ class ConstraintsTest(testing.TestCase):
 
     def test_get_method(self):
         obj = constraints.get("unit_norm")
-        self.assertTrue(obj, constraints.UnitNorm)
+        self.assertIsInstance(obj, constraints.UnitNorm)
 
         obj = constraints.get(None)
         self.assertEqual(obj, None)

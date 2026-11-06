@@ -391,6 +391,12 @@ class OptimizerTest(testing.TestCase):
 
         self.assertAllClose(variable1, variable3)
 
+    def test_exclude_from_weight_decay_after_build_raises(self):
+        optimizer = optimizers.AdamW(weight_decay=0.05)
+        optimizer.build([backend.Variable([0.9, 0.5])])
+        with self.assertRaisesRegex(ValueError, "before the optimizer is"):
+            optimizer.exclude_from_weight_decay(var_names=["bias"])
+
     def test_setting_lr_to_callable_untracks_lr_var(self):
         adam = optimizers.Adam(learning_rate=0.001)
         self.assertLen(adam.variables, 2)

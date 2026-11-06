@@ -9,6 +9,8 @@ from keras.src.backend import any_symbolic_tensors
 from keras.src.backend import config
 from keras.src.backend import standardize_data_format
 from keras.src.backend.common import dtypes
+from keras.src.backend.common import is_float_dtype
+from keras.src.backend.common import standardize_dtype
 from keras.src.backend.common.backend_utils import canonicalize_axes
 from keras.src.backend.common.backend_utils import canonicalize_axis
 from keras.src.backend.common.backend_utils import check_conv_input_channels
@@ -1990,7 +1992,7 @@ def one_hot(x, num_classes, axis=-1, dtype=None, sparse=False):
            [0. 0. 1. 0.]
            [1. 0. 0. 0.]], shape=(4, 4), dtype=float32)
     """
-    dtype = backend.standardize_dtype(dtype)
+    dtype = standardize_dtype(dtype)
     if any_symbolic_tensors((x,)):
         return OneHot(
             num_classes, axis=axis, dtype=dtype, sparse=sparse
@@ -2021,8 +2023,8 @@ class BinaryCrossentropy(Operation):
                 "Received: "
                 f"target.shape={target.shape}, output.shape={output.shape}"
             )
-        dtype = backend.standardize_dtype(output.dtype)
-        if not backend.is_float_dtype(dtype):
+        dtype = standardize_dtype(output.dtype)
+        if not is_float_dtype(dtype):
             dtype = backend.floatx()
         return KerasTensor(output.shape, dtype=dtype)
 
@@ -2330,7 +2332,7 @@ def multi_hot(
     if num_classes is None:
         raise ValueError("Argument `num_classes` must be specified.")
 
-    dtype = backend.standardize_dtype(dtype)
+    dtype = standardize_dtype(dtype)
     if any_symbolic_tensors((inputs,)):
         return MultiHot(num_classes, axis, dtype, sparse).symbolic_call(inputs)
 
@@ -3047,7 +3049,7 @@ def rms_normalization(x, scale=None, axis=-1, epsilon=None):
 def _rms_normalization(x, scale=None, axis=-1, epsilon=None):
     if epsilon is None:
         epsilon = backend.epsilon()
-    original_dtype = backend.standardize_dtype(x.dtype)
+    original_dtype = standardize_dtype(x.dtype)
     # Computes in at least float32 precision for stability in half precision
     # training.
     compute_dtype = backend.result_type(x.dtype, "float32")
@@ -3163,7 +3165,7 @@ def _layer_normalization(
 ):
     if epsilon is None:
         epsilon = backend.epsilon()
-    original_dtype = backend.standardize_dtype(x.dtype)
+    original_dtype = standardize_dtype(x.dtype)
     # Computes in at least float32 precision for stability in half precision
     # training.
     compute_dtype = backend.result_type(x.dtype, "float32")
@@ -3215,17 +3217,19 @@ def _layer_normalization(
     if gamma is not None:
         inv = inv * gamma
 
-    res = -mean * inv
+    # Center before scaling. Folding the mean and beta into a single offset,
+    # as `x * inv + (beta - mean * inv)`, loses beta whenever `mean * inv` is
+    # large enough that adding beta to it rounds away: for a constant row the
+    # two large terms then cancel exactly and the result is 0 instead of beta.
+    outputs = (x - mean) * inv
     if beta is not None:
-        res = res + beta
-
-    outputs = x * inv + res
+        outputs = outputs + beta
     return backend.ops.cast(outputs, original_dtype)
 
 
 class Polar(Operation):
     def compute_output_spec(self, abs_, angle):
-        dtype = backend.standardize_dtype(
+        dtype = standardize_dtype(
             dtypes.result_type(
                 getattr(abs_, "dtype", backend.floatx()),
                 getattr(angle, "dtype", backend.floatx()),
