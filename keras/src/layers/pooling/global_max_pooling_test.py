@@ -159,3 +159,14 @@ class GlobalMaxPoolingCorrectnessTest(testing.TestCase):
         outputs = layer(inputs)
         expected = np_global_max_pool3d(inputs, data_format, keepdims)
         self.assertAllClose(outputs, expected)
+
+    @parameterized.parameters(
+        (layers.GlobalMaxPooling1D, (0, 3, 4)),
+        (layers.GlobalMaxPooling2D, (0, 3, 3, 4)),
+        (layers.GlobalMaxPooling3D, (0, 3, 3, 3, 4)),
+    )
+    def test_global_max_pooling_zero_batch(self, layer_cls, input_shape):
+        # The pooled axes are not empty, so an empty batch gives an empty
+        # batch of channel vectors.
+        outputs = layer_cls()(np.zeros(input_shape, "float32"))
+        self.assertEqual(tuple(outputs.shape), (0, 4))

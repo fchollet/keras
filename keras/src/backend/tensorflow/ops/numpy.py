@@ -747,6 +747,19 @@ def mean(x, axis=None, keepdims=False):
     return tf.reduce_mean(x, axis=axis, keepdims=keepdims)
 
 
+def _smallest_reduced_dim(x, axis):
+    """Returns the smallest reduced axis size, or 1 when no axis is reduced."""
+    if axis is None:
+        axes = list(range(len(x.shape)))
+    else:
+        axes = [
+            canonicalize_axis(a, len(x.shape)) for a in to_tuple_or_list(axis)
+        ]
+    if not axes:
+        return tf.constant(1, "int32")
+    return tf.reduce_min(tf.gather(tf.shape(x), tf.constant(axes, "int32")))
+
+
 def max(x, axis=None, keepdims=False, initial=None):
     x = convert_to_tensor(x)
 
@@ -761,13 +774,15 @@ def max(x, axis=None, keepdims=False, initial=None):
             x = tf.reduce_max(x, axis=axis, keepdims=keepdims)
             return tf.math.maximum(x, initial)
 
-    # TensorFlow returns -inf by default for an empty list, but for consistency
-    # with other backends and the numpy API we want to throw in this case.
+    # TensorFlow returns -inf by default for a reduction over an empty axis,
+    # but for consistency with other backends and the numpy API we want to
+    # throw in this case. A zero-size tensor reduced over axes that are not
+    # empty is fine and gives an empty result.
     if tf.executing_eagerly():
-        size_x = tf.size(x)
+        smallest_reduced_dim = _smallest_reduced_dim(x, axis)
         tf.assert_greater(
-            size_x,
-            tf.constant(0, dtype=size_x.dtype),
+            smallest_reduced_dim,
+            tf.constant(0, dtype=smallest_reduced_dim.dtype),
             message="Cannot compute the max of an empty tensor.",
         )
 
@@ -2300,13 +2315,15 @@ def min(x, axis=None, keepdims=False, initial=None):
             x = tf.reduce_min(x, axis=axis, keepdims=keepdims)
         return tf.math.minimum(x, initial)
 
-    # TensorFlow returns inf by default for an empty list, but for consistency
-    # with other backends and the numpy API we want to throw in this case.
+    # TensorFlow returns inf by default for a reduction over an empty axis,
+    # but for consistency with other backends and the numpy API we want to
+    # throw in this case. A zero-size tensor reduced over axes that are not
+    # empty is fine and gives an empty result.
     if tf.executing_eagerly():
-        size_x = tf.size(x)
+        smallest_reduced_dim = _smallest_reduced_dim(x, axis)
         tf.assert_greater(
-            size_x,
-            tf.constant(0, dtype=size_x.dtype),
+            smallest_reduced_dim,
+            tf.constant(0, dtype=smallest_reduced_dim.dtype),
             message="Cannot compute the min of an empty tensor.",
         )
 

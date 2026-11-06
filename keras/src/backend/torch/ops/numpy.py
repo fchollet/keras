@@ -341,15 +341,33 @@ def mean(x, axis=None, keepdims=False):
     return cast(result, result_dtype)
 
 
+def _reduced_axes(x, axis):
+    if axis is None:
+        return list(range(x.ndim))
+    return [canonicalize_axis(a, x.ndim) for a in to_tuple_or_list(axis)]
+
+
+def _full_like_reduction(x, axes, keepdims, fill_value):
+    """Returns `fill_value` in the shape, dtype and device of a reduction."""
+    shape = [
+        1 if i in axes else d
+        for i, d in enumerate(x.shape)
+        if keepdims or i not in axes
+    ]
+    return torch.full(shape, fill_value, dtype=x.dtype, device=x.device)
+
+
 def max(x, axis=None, keepdims=False, initial=None):
     x = convert_to_tensor(x)
-    if 0 in x.shape:
+    # Only a reduction over an empty axis has no result. A zero-size tensor
+    # reduced over axes that are not empty gives an empty result.
+    axes = _reduced_axes(x, axis)
+    if builtins.any(
+        isinstance(x.shape[a], int) and x.shape[a] == 0 for a in axes
+    ):
         if initial is None:
             raise ValueError("Cannot compute the max of an empty tensor.")
-        elif keepdims:
-            return torch.full((1,) * len(x.shape), initial)
-        else:
-            return torch.tensor(initial)
+        return _full_like_reduction(x, axes, keepdims, initial)
 
     if axis is None:
         # Reduce over every dimension explicitly, since older torch versions
@@ -364,9 +382,7 @@ def max(x, axis=None, keepdims=False, initial=None):
     if initial is not None:
         dtype = to_torch_dtype(result.dtype)
         initial = convert_to_tensor(initial, dtype=dtype)
-        return torch.maximum(
-            result, torch.full(result.shape, initial, dtype=dtype)
-        )
+        return torch.maximum(result, initial)
     return result
 
 
@@ -1475,13 +1491,15 @@ def meshgrid(*x, indexing="xy"):
 
 def min(x, axis=None, keepdims=False, initial=None):
     x = convert_to_tensor(x)
-    if 0 in x.shape:
+    # Only a reduction over an empty axis has no result. A zero-size tensor
+    # reduced over axes that are not empty gives an empty result.
+    axes = _reduced_axes(x, axis)
+    if builtins.any(
+        isinstance(x.shape[a], int) and x.shape[a] == 0 for a in axes
+    ):
         if initial is None:
             raise ValueError("Cannot compute the min of an empty tensor.")
-        elif keepdims:
-            return torch.full((1,) * len(x.shape), initial)
-        else:
-            return torch.tensor(initial)
+        return _full_like_reduction(x, axes, keepdims, initial)
 
     if axis is None:
         # Reduce over every dimension explicitly, since older torch versions

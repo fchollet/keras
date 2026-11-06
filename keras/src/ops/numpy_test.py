@@ -6739,6 +6739,33 @@ class NumpyOneInputOpsCorrectnessTest(testing.TestCase):
             np.max(x, initial=1, keepdims=True),
         )
 
+        # A zero-size tensor reduced over axes that are not empty gives an
+        # empty result, as in NumPy.
+        x = np.zeros((0, 3, 2))
+        for kwargs in [
+            {"axis": (1, 2)},
+            {"axis": -1},
+            {"axis": 1, "keepdims": True},
+            {"axis": ()},
+        ]:
+            self.assertEqual(
+                tuple(knp.max(x, **kwargs).shape), np.max(x, **kwargs).shape
+            )
+
+        # With `initial`, an empty reduced axis gives `initial` in the
+        # reduced shape and the input dtype.
+        x = np.zeros((0, 4), "int32")
+        for kwargs in [{"axis": 0}, {"axis": 1}, {"axis": 0, "keepdims": True}]:
+            expected = np.max(x, initial=-1, **kwargs)
+            result = knp.max(x, initial=-1, **kwargs)
+            self.assertEqual(tuple(result.shape), expected.shape)
+            self.assertEqual(standardize_dtype(result.dtype), "int32")
+            self.assertAllClose(result, expected)
+
+        # Reducing over an empty axis without `initial` raises.
+        with self.assertRaises(Exception):
+            knp.max(np.zeros((3, 0)), axis=-1)
+
     def test_min(self):
         x = np.array([[1, 2, 3], [3, 2, 1]])
         self.assertAllClose(knp.min(x), np.min(x))
@@ -6786,6 +6813,33 @@ class NumpyOneInputOpsCorrectnessTest(testing.TestCase):
             knp.min(x, initial=1, keepdims=True),
             np.min(x, initial=1, keepdims=True),
         )
+
+        # A zero-size tensor reduced over axes that are not empty gives an
+        # empty result, as in NumPy.
+        x = np.zeros((0, 3, 2))
+        for kwargs in [
+            {"axis": (1, 2)},
+            {"axis": -1},
+            {"axis": 1, "keepdims": True},
+            {"axis": ()},
+        ]:
+            self.assertEqual(
+                tuple(knp.min(x, **kwargs).shape), np.min(x, **kwargs).shape
+            )
+
+        # With `initial`, an empty reduced axis gives `initial` in the
+        # reduced shape and the input dtype.
+        x = np.zeros((0, 4), "int32")
+        for kwargs in [{"axis": 0}, {"axis": 1}, {"axis": 0, "keepdims": True}]:
+            expected = np.min(x, initial=5, **kwargs)
+            result = knp.min(x, initial=5, **kwargs)
+            self.assertEqual(tuple(result.shape), expected.shape)
+            self.assertEqual(standardize_dtype(result.dtype), "int32")
+            self.assertAllClose(result, expected)
+
+        # Reducing over an empty axis without `initial` raises.
+        with self.assertRaises(Exception):
+            knp.min(np.zeros((3, 0)), axis=-1)
 
     def test_median(self):
         x = np.array([[1, 2, 3], [3, 2, 1]]).astype("float32")
