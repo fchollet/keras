@@ -12,7 +12,6 @@ python3 -m benchmarks.layer_benchmark.rnn_benchmark \
 ```
 """
 
-import tensorflow as tf
 from absl import app
 from absl import flags
 
@@ -195,14 +194,12 @@ def benchmark_bidirectional(
     layer_name = "Bidirectional"
     init_args = {}
     keras_layer = keras.layers.Bidirectional(keras.layers.LSTM(32))
-    tf_keras_layer = tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(32))
     benchmark = LayerBenchmark(
         layer_name,
         init_args,
         input_shape=[256, 256],
         jit_compile=jit_compile,
         keras_layer=keras_layer,
-        tf_keras_layer=tf_keras_layer,
     )
 
     benchmark.benchmark_predict(
@@ -224,16 +221,12 @@ def benchmark_time_distributed(
     layer_name = "TimeDistributed"
     init_args = {}
     keras_layer = keras.layers.TimeDistributed(keras.layers.Conv2D(16, (3, 3)))
-    tf_keras_layer = tf.keras.layers.TimeDistributed(
-        tf.keras.layers.Conv2D(16, (3, 3))
-    )
     benchmark = LayerBenchmark(
         layer_name,
         init_args,
         input_shape=[10, 32, 32, 3],
         jit_compile=jit_compile,
         keras_layer=keras_layer,
-        tf_keras_layer=tf_keras_layer,
     )
 
     benchmark.benchmark_predict(
