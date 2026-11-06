@@ -1,5 +1,4 @@
 from keras.src import backend
-from keras.src import ops
 from keras.src.layers.input_spec import InputSpec
 from keras.src.layers.layer import Layer
 from keras.src.ops.operation_utils import compute_pooling_output_shape
@@ -39,7 +38,7 @@ class BasePooling(Layer):
 
     def call(self, inputs):
         if self.pool_mode == "max":
-            return ops.max_pool(
+            return backend.ops.nn.max_pool(
                 inputs,
                 pool_size=self.pool_size,
                 strides=self.strides,
@@ -47,7 +46,7 @@ class BasePooling(Layer):
                 data_format=self.data_format,
             )
         elif self.pool_mode == "average":
-            return ops.average_pool(
+            return backend.ops.nn.average_pool(
                 inputs,
                 pool_size=self.pool_size,
                 strides=self.strides,

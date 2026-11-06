@@ -1,4 +1,4 @@
-from keras.src import ops
+from keras.src import backend
 from keras.src.api_export import keras_export
 from keras.src.layers.pooling.base_global_pooling import BaseGlobalPooling
 
@@ -63,4 +63,6 @@ class GlobalMaxPooling1D(BaseGlobalPooling):
 
     def call(self, inputs):
         steps_axis = 1 if self.data_format == "channels_last" else 2
-        return ops.max(inputs, axis=steps_axis, keepdims=self.keepdims)
+        return backend.ops.numpy.max(
+            inputs, axis=steps_axis, keepdims=self.keepdims
+        )

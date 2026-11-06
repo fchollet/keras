@@ -1,6 +1,6 @@
 """Base classes for adaptive pooling layers."""
 
-from keras.src import ops
+from keras.src import backend
 from keras.src.backend import config
 from keras.src.layers.layer import Layer
 
@@ -49,7 +49,7 @@ class BaseAdaptiveAveragePooling(BaseAdaptivePooling):
     """Base class for adaptive average pooling in 1D, 2D, and 3D."""
 
     def call(self, inputs):
-        return ops.adaptive_average_pool(
+        return backend.ops.nn.adaptive_average_pool(
             inputs, output_size=self.output_size, data_format=self.data_format
         )
 
@@ -58,6 +58,6 @@ class BaseAdaptiveMaxPooling(BaseAdaptivePooling):
     """Base class for adaptive max pooling in 1D, 2D, and 3D."""
 
     def call(self, inputs):
-        return ops.adaptive_max_pool(
+        return backend.ops.nn.adaptive_max_pool(
             inputs, output_size=self.output_size, data_format=self.data_format
         )

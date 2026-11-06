@@ -1,4 +1,4 @@
-from keras.src import ops
+from keras.src import backend
 from keras.src.api_export import keras_export
 from keras.src.layers.pooling.base_global_pooling import BaseGlobalPooling
 
@@ -65,5 +65,9 @@ class GlobalAveragePooling3D(BaseGlobalPooling):
 
     def call(self, inputs):
         if self.data_format == "channels_last":
-            return ops.mean(inputs, axis=[1, 2, 3], keepdims=self.keepdims)
-        return ops.mean(inputs, axis=[2, 3, 4], keepdims=self.keepdims)
+            return backend.ops.numpy.mean(
+                inputs, axis=[1, 2, 3], keepdims=self.keepdims
+            )
+        return backend.ops.numpy.mean(
+            inputs, axis=[2, 3, 4], keepdims=self.keepdims
+        )
