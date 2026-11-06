@@ -3110,10 +3110,14 @@ def _dstack(xs):
         backend.ops.numpy, "dstack"
     ):
         return backend.ops.numpy.dstack(xs)
+    xs = [
+        x if isinstance(x, (int, float)) else backend.ops.convert_to_tensor(x)
+        for x in xs
+    ]
     dtype = dtypes.result_type(*[getattr(x, "dtype", type(x)) for x in xs])
     xs_reshaped = []
     for x in xs:
-        x = backend.ops.cast(backend.ops.convert_to_tensor(x), dtype)
+        x = backend.ops.cast(x, dtype)
         if len(x.shape) == 0:
             x = backend.ops.numpy.expand_dims(x, axis=(0, 1, 2))
         elif len(x.shape) == 1:
