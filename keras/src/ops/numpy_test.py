@@ -8757,6 +8757,47 @@ class NumpyOneInputOpsCorrectnessTest(testing.TestCase):
         self.assertAllClose(v, [1, 2])
         self.assertAllClose(idx, [1, 2])
 
+    @parameterized.named_parameters(
+        named_product(
+            dtype=[
+                "int8",
+                "int16",
+                "int32",
+                "int64",
+                "uint8",
+                "uint16",
+                "uint32",
+                "uint64",
+            ]
+        )
+    )
+    @pytest.mark.skipif(
+        backend.backend() != "tensorflow",
+        reason="Only TensorFlow supports a tensor `size`.",
+    )
+    def test_unique_tensor_size(self, dtype):
+        import tensorflow as tf
+
+        x = np.array([3, 1, 2, 1])
+        # Truncation and padding.
+        v = knp.unique(x, size=tf.constant(2, dtype=dtype))
+        self.assertAllClose(v, [1, 2])
+        v, counts = knp.unique(
+            x,
+            size=tf.constant(5, dtype=dtype),
+            fill_value=-1,
+            return_counts=True,
+        )
+        self.assertAllClose(v, [1, 2, 3, -1, -1])
+        self.assertAllClose(counts, [2, 1, 1, 0, 0])
+
+        # Dynamic `size` in graph mode.
+        @tf.function(input_signature=[tf.TensorSpec([], dtype)])
+        def unique_fn(size):
+            return knp.unique(x, size=size)
+
+        self.assertAllClose(unique_fn(tf.constant(2, dtype=dtype)), [1, 2])
+
 
 class NumpyArrayCreateOpsCorrectnessTest(testing.TestCase):
     def test_ones(self):
