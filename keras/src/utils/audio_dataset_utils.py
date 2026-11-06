@@ -17,6 +17,39 @@ except ImportError:
 
 ALLOWED_FORMATS = (".wav",)
 
+# When resampling, the target length is `len(audio) * sampling_rate /
+# file_sample_rate`, and `file_sample_rate` is read straight from the
+# (untrusted) WAV header. A file that declares an absurdly small rate turns a
+# small clip into an enormous resample target, which the resampler then
+# allocates -- e.g. a 2 MB file claiming 1 Hz resampled to 16 kHz asks for
+# ~1.6e10 samples (~128 GB). A target is rejected as such a bomb only when it
+# exceeds BOTH this absolute floor AND this multiple of the stored samples,
+# mirroring the dual condition used by `saving_lib._reject_zip_bomb` (CWE-409).
+_AUDIO_RESAMPLE_BOMB_FLOOR = 1 << 28  # 268M samples (~93 min @ 48 kHz)
+_AUDIO_RESAMPLE_MAX_EXPANSION = 1000
+
+
+def _as_control_inputs(assert_op):
+    """Returns `assert_op` as a `tf.control_dependencies` input list.
+
+    `tf.debugging` asserts return `None` when they run eagerly, and
+    `tf.control_dependencies` rejects a `None` entry.
+    """
+    return [] if assert_op is None else [assert_op]
+
+
+def _reject_resample_bomb(num_samples, input_samples):
+    if (
+        num_samples > _AUDIO_RESAMPLE_BOMB_FLOOR
+        and num_samples > _AUDIO_RESAMPLE_MAX_EXPANSION * max(1, input_samples)
+    ):
+        raise ValueError(
+            f"Refusing to resample audio to {num_samples} samples from "
+            f"{input_samples} stored samples; the requested expansion looks "
+            "like a decompression bomb driven by an implausible file sample "
+            "rate."
+        )
+
 
 @keras_export("keras.utils.audio_dataset_from_directory")
 def audio_dataset_from_directory(
@@ -586,9 +619,41 @@ def _read_and_decode_audio_tf(
     if sampling_rate is not None:
         # default_audio_rate should have dtype=int64
         default_audio_rate = tf.cast(default_audio_rate, tf.int64)
-        audio = tfio.audio.resample(
-            input=audio, rate_in=default_audio_rate, rate_out=sampling_rate
+        # `rate_in` is read from the (untrusted) WAV header. Reject a
+        # non-positive rate and a resample target that looks like a
+        # decompression bomb before `resample` allocates it (see
+        # `_reject_resample_bomb`). Both checks are wired in as explicit
+        # control dependencies so that in graph mode they run before the
+        # division they protect and before the resample itself; the asserts
+        # return `None` in eager mode, where they have already run.
+        rate_is_positive = tf.debugging.assert_positive(
+            default_audio_rate, message="Invalid WAV file sample rate."
         )
+        with tf.control_dependencies(_as_control_inputs(rate_is_positive)):
+            input_samples = tf.cast(tf.shape(audio)[0], tf.int64)
+            num_samples = (
+                input_samples * tf.cast(sampling_rate, tf.int64)
+            ) // default_audio_rate
+        is_bomb = tf.logical_and(
+            num_samples > _AUDIO_RESAMPLE_BOMB_FLOOR,
+            num_samples
+            > _AUDIO_RESAMPLE_MAX_EXPANSION * tf.maximum(input_samples, 1),
+        )
+        is_not_bomb = tf.debugging.Assert(
+            tf.logical_not(is_bomb),
+            [
+                "Refusing to resample audio: requested expansion looks like a "
+                "decompression bomb driven by an implausible file sample rate. "
+                "Target samples:",
+                num_samples,
+                "stored samples:",
+                input_samples,
+            ],
+        )
+        with tf.control_dependencies(_as_control_inputs(is_not_bomb)):
+            audio = tfio.audio.resample(
+                input=audio, rate_in=default_audio_rate, rate_out=sampling_rate
+            )
         if output_sequence_length is not None:
             audio = _trim_and_pad_audio(audio, output_sequence_length)
     return audio
@@ -658,6 +723,11 @@ def _read_and_decode_audio_grain(
         path = str(path)
 
     default_audio_rate, audio = wavfile.read(path)
+    default_audio_rate = int(default_audio_rate)
+    if default_audio_rate <= 0:
+        raise ValueError(
+            f"Invalid sample rate {default_audio_rate} in WAV file '{path}'."
+        )
 
     # Ensure audio is float32 and normalized between -1.0 and 1.0
     if audio.dtype == np.int16:
@@ -681,6 +751,7 @@ def _read_and_decode_audio_grain(
                 round(len(audio) * sampling_rate / default_audio_rate)
             )
             num_samples = max(1, num_samples)
+            _reject_resample_bomb(num_samples, len(audio))
             audio = signal.resample(audio, num_samples, axis=0)
             audio = audio.astype("float32")
 
