@@ -3042,6 +3042,24 @@ class NNOpsCorrectnessTest(testing.TestCase):
         self.assertFalse(np.isnan(x_grad).any())
         self.assertAllClose(x_grad, expected_grad)
 
+    @pytest.mark.skipif(
+        not backend.SUPPORTS_GRADIENT,
+        reason="Backend does not support gradients.",
+    )
+    def test_normalize_l2_half_precision_gradients(self):
+        # In half precision, `epsilon * epsilon` underflows to 0 and the
+        # `rsqrt` gradient overflows the dtype range, yielding `-inf`
+        # (see #23546). Computing in float32 fixes it.
+        dtype = "float16"
+        x = ops.cast(np.full((4, 2), 0.01), dtype)
+
+        def f(v):
+            return ops.sum(knn.normalize(v, axis=-1, order=2))
+
+        x_grad = ops.convert_to_numpy(ops.grad(f)(x))
+        self.assertFalse(np.isinf(x_grad).any())
+        self.assertFalse(np.isnan(x_grad).any())
+
     def test_psnr(self):
         x1 = np.array([[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]])
         x2 = np.array([[0.2, 0.2, 0.3], [0.4, 0.6, 0.6]])

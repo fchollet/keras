@@ -2688,7 +2688,7 @@ class Normalize(Operation):
     def compute_output_spec(self, x):
         if self.axis is not None:
             canonicalize_axes(self.axis, len(x.shape))
-        return KerasTensor(shape=x.shape)
+        return KerasTensor(shape=x.shape, dtype=x.dtype)
 
     def call(self, x):
         return _normalize(
@@ -2745,6 +2745,15 @@ def _normalize(x, axis=-1, order=2, epsilon=None):
         x = backend.ops.numpy.expand_dims(x, axis=0)
     if epsilon is None:
         epsilon = backend.epsilon()
+    # In half precision, `epsilon**2` underflows to 0 and the `rsqrt`
+    # gradient overflows the dtype range, yielding `-inf`. Compute in float32
+    # for stability and cast the result back to the input dtype.
+    input_dtype = backend.standardize_dtype(x.dtype)
+    compute_dtype = (
+        "float32" if input_dtype in ("float16", "bfloat16") else input_dtype
+    )
+    if compute_dtype != input_dtype:
+        x = backend.ops.cast(x, compute_dtype)
     if 2 == order:
         # A special case: L2 normalization with `x * rsqrt(...)`
         # instead of `x / sqrt(...)`. Clamp the squared norm before the
@@ -2755,10 +2764,14 @@ def _normalize(x, axis=-1, order=2, epsilon=None):
         inv_norm = backend.ops.math.rsqrt(
             backend.ops.numpy.maximum(square_sum, epsilon * epsilon)
         )
-        return x * inv_norm
-    norm = backend.ops.linalg.norm(x, ord=order, axis=axis, keepdims=True)
-    denom = backend.ops.numpy.maximum(norm, epsilon)
-    return backend.ops.numpy.divide(x, denom)
+        result = x * inv_norm
+    else:
+        norm = backend.ops.linalg.norm(x, ord=order, axis=axis, keepdims=True)
+        denom = backend.ops.numpy.maximum(norm, epsilon)
+        result = backend.ops.numpy.divide(x, denom)
+    if compute_dtype != input_dtype:
+        result = backend.ops.cast(result, input_dtype)
+    return result
 
 
 class PSNR(Operation):
