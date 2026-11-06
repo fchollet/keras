@@ -360,10 +360,10 @@ class Distiller(Model):
         else:
             return {"final_output": self.teacher(x, training=False)}
 
-    def _extract_all_student_features(self, x, y_pred):
+    def _extract_all_student_features(self, x, y_pred, training):
         """Extract all student features in a single forward pass."""
         if self._student_feature_extractor is not None:
-            return self._student_feature_extractor(x, training=True)
+            return self._student_feature_extractor(x, training=training)
         else:
             return {"final_output": y_pred}
 
@@ -458,7 +458,9 @@ class Distiller(Model):
         distillation_loss = 0.0
         if self.student_loss_weight < 1.0:
             teacher_features = self._extract_all_teacher_features(x)
-            student_features = self._extract_all_student_features(x, y_pred)
+            student_features = self._extract_all_student_features(
+                x, y_pred, training=training
+            )
 
             # Apply distillation losses using pre-extracted features
             for distillation_loss_fn, weight in zip(

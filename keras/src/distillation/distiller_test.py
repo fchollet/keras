@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 import keras
+from keras.src.distillation.distillation_loss import FeatureDistillation
 from keras.src.distillation.distillation_loss import LogitsDistillation
 from keras.src.distillation.distiller import Distiller
 from keras.src.testing import TestCase
@@ -529,3 +530,107 @@ class TestDistiller(TestCase):
 
         # The core serialization functionality is working
         self.assertTrue(True, "Distiller serialization test passed")
+
+
+@pytest.mark.requires_trainable_backend
+class TestDistillerFeatureExtractionTrainingFlag(TestCase):
+    """Feature extraction must respect the `training` flag of the caller."""
+
+    def _build_distiller(self, make_feature_layer, input_dim=2):
+        def make_model(name):
+            inputs = keras.Input((input_dim,))
+            outputs = make_feature_layer()(inputs)
+            return keras.Model(inputs, outputs, name=name)
+
+        teacher = make_model("teacher")
+        student = make_model("student")
+        # Identical models, so the feature loss is zero in inference mode.
+        student.set_weights(teacher.get_weights())
+        distiller = Distiller(
+            teacher=teacher,
+            student=student,
+            distillation_losses=FeatureDistillation(
+                teacher_layer_name="features",
+                student_layer_name="features",
+            ),
+            student_loss_weight=0.0,
+        )
+        distiller.compile(optimizer="sgd", loss="mse")
+        return distiller, student
+
+    def _make_batch_norm(self):
+        return keras.layers.BatchNormalization(momentum=0.5, name="features")
+
+    def _batch_norm_state(self, student):
+        bn = student.get_layer("features")
+        return (
+            keras.ops.convert_to_numpy(bn.moving_mean).copy(),
+            keras.ops.convert_to_numpy(bn.moving_variance).copy(),
+        )
+
+    def _assert_batch_norm_state_unchanged(self, run_evaluation):
+        distiller, student = self._build_distiller(self._make_batch_norm)
+        x = np.array([[10, 20], [14, 24]], dtype="float32")
+        y = np.zeros((2, 2), dtype="float32")
+        mean_before, variance_before = self._batch_norm_state(student)
+        predictions_before = keras.ops.convert_to_numpy(
+            student(x, training=False)
+        )
+
+        for _ in range(2):  # The state must stay put across repeated calls.
+            distillation_loss = run_evaluation(distiller, x, y)
+            self.assertAllClose(distillation_loss, 0.0)
+            mean_after, variance_after = self._batch_norm_state(student)
+            self.assertAllClose(mean_after, mean_before)
+            self.assertAllClose(variance_after, variance_before)
+
+        self.assertAllClose(
+            keras.ops.convert_to_numpy(student(x, training=False)),
+            predictions_before,
+        )
+
+    def test_evaluate_does_not_update_batch_norm_statistics(self):
+        def run_evaluation(distiller, x, y):
+            results = distiller.evaluate(
+                x, y, batch_size=2, verbose=0, return_dict=True
+            )
+            return results["distillation_loss"]
+
+        self._assert_batch_norm_state_unchanged(run_evaluation)
+
+    def test_test_on_batch_does_not_update_batch_norm_statistics(self):
+        def run_evaluation(distiller, x, y):
+            results = distiller.test_on_batch(x, y, return_dict=True)
+            return results["distillation_loss"]
+
+        self._assert_batch_norm_state_unchanged(run_evaluation)
+
+    def test_evaluate_disables_dropout_in_feature_extraction(self):
+        keras.utils.set_random_seed(0)
+
+        def make_feature_layer():
+            return keras.Sequential(
+                [keras.layers.Dense(4), keras.layers.Dropout(0.5)],
+                name="features",
+            )
+
+        distiller, _ = self._build_distiller(make_feature_layer, input_dim=4)
+        x = np.random.random((8, 4)).astype("float32")
+        y = np.zeros((8, 4), dtype="float32")
+
+        for _ in range(2):  # Dropout must not make the loss non-deterministic.
+            results = distiller.evaluate(
+                x, y, batch_size=8, verbose=0, return_dict=True
+            )
+            self.assertAllClose(results["distillation_loss"], 0.0)
+
+    def test_fit_still_updates_batch_norm_statistics(self):
+        distiller, student = self._build_distiller(self._make_batch_norm)
+        x = np.array([[10, 20], [14, 24]], dtype="float32")
+        y = np.zeros((2, 2), dtype="float32")
+        mean_before, _ = self._batch_norm_state(student)
+
+        distiller.fit(x, y, batch_size=2, epochs=1, verbose=0)
+
+        mean_after, _ = self._batch_norm_state(student)
+        self.assertNotAllClose(mean_after, mean_before)
