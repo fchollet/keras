@@ -1700,6 +1700,7 @@ def unfold(input, kernel_size, dilation=1, padding=0, stride=1):
     Returns:
         3-D tensor, shape (N, C*kH*kW, L)
     """
+    input = convert_to_tensor(input)
     return tnn.unfold(
         input,
         kernel_size=kernel_size,
