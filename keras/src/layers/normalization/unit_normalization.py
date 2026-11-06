@@ -41,7 +41,10 @@ class UnitNormalization(Layer):
         self._build_at_init()
 
     def call(self, inputs):
-        return ops.normalize(inputs, axis=self.axis, order=2, epsilon=1e-12)
+        # torch compilation cannot trace the `TrackedList` that `self.axis`
+        # becomes, so pass a plain tuple to avoid a graph break
+        axis = tuple(self.axis) if isinstance(self.axis, list) else self.axis
+        return ops.normalize(inputs, axis=axis, order=2, epsilon=1e-12)
 
     def compute_output_shape(self, input_shape):
         # Ensure axis is always treated as a list

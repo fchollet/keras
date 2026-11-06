@@ -1,7 +1,9 @@
 import numpy as np
+import pytest
 
 from keras.src import backend
 from keras.src import layers
+from keras.src import ops
 from keras.src import testing
 
 
@@ -59,3 +61,17 @@ class UnitNormalizationTest(testing.TestCase):
         self.assertAllClose(squared_l2_norm(outputs[1, :, 0]), 1.0)
         self.assertAllClose(squared_l2_norm(outputs[0, :, 1]), 1.0)
         self.assertAllClose(squared_l2_norm(outputs[1, :, 1]), 1.0)
+
+    @pytest.mark.skipif(backend.backend() != "torch", reason="Torch only test.")
+    def test_torch_compile_fullgraph(self):
+        import torch
+
+        x = ops.convert_to_tensor(
+            np.random.normal(size=(2, 8, 4)).astype("float32")
+        )
+        layer = layers.UnitNormalization(axis=[1, 2])
+
+        torch._dynamo.reset()
+        compiled = torch.compile(layer, fullgraph=True, backend="eager")
+        self.assertAllClose(compiled(x), layer(x))
+        self.assertEqual(layer.get_config()["axis"], [1, 2])
