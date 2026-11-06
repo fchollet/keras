@@ -8161,7 +8161,19 @@ def _compute_split_output_spec(x, indices_or_sections, axis):
             for _ in range(indices_or_sections)
         ]
 
-    all_indices = [0] + list(indices_or_sections) + [x_size_on_axis]
+    indices = list(indices_or_sections)
+    if x_size_on_axis is not None:
+        # Like NumPy, wrap negative indices and clip them to the axis length.
+        indices = np.clip(
+            [i + x_size_on_axis if i < 0 else i for i in indices],
+            0,
+            x_size_on_axis,
+        ).tolist()
+    else:
+        # A negative index gives an unknown size when the axis length is
+        # unknown.
+        indices = [None if i < 0 else i for i in indices]
+    all_indices = [0] + indices + [x_size_on_axis]
     outputs = []
 
     for i in range(len(all_indices) - 1):
