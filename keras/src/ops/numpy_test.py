@@ -3675,7 +3675,10 @@ class NumpyTwoInputOpsCorrectnessTest(testing.TestCase):
         self.assertAllClose(knp.Divide()(x, y), np.divide(x, y))
         self.assertAllClose(knp.Divide()(x, z), np.divide(x, z))
 
-    def test_divide_no_nan(self):
+    @parameterized.named_parameters(named_product(BACKEND_AGNOSTIC_OPS))
+    def test_divide_no_nan(self, backend_agnostic_ops):
+        backend.config._set_use_backend_agnostic_ops(backend_agnostic_ops)
+        self.addCleanup(backend.config._set_use_backend_agnostic_ops, False)
         x = np.array(
             [[2, 1, 0], [np.inf, -np.inf, np.nan], [np.inf, -np.inf, np.nan]]
         )
@@ -3686,11 +3689,14 @@ class NumpyTwoInputOpsCorrectnessTest(testing.TestCase):
         self.assertAllClose(knp.divide_no_nan(x, y), expected_result)
         self.assertAllClose(knp.DivideNoNan()(x, y), expected_result)
 
+    @parameterized.named_parameters(named_product(BACKEND_AGNOSTIC_OPS))
     @pytest.mark.skipif(
         not backend.SUPPORTS_GRADIENT,
         reason="Backend does not support gradients.",
     )
-    def test_divide_no_nan_gradients(self):
+    def test_divide_no_nan_gradients(self, backend_agnostic_ops):
+        backend.config._set_use_backend_agnostic_ops(backend_agnostic_ops)
+        self.addCleanup(backend.config._set_use_backend_agnostic_ops, False)
         expected_x1_grad = np.array([0.0, 0.5], dtype="float32")
         expected_x2_grad = np.array([0.0, -0.5], dtype="float32")
 
@@ -10554,9 +10560,14 @@ class NumpyDtypeTest(testing.TestCase):
         )
 
     @parameterized.named_parameters(
-        named_product(dtypes=itertools.combinations(BINARY_DTYPES, 2))
+        named_product(
+            BACKEND_AGNOSTIC_OPS,
+            dtypes=itertools.combinations(BINARY_DTYPES, 2),
+        )
     )
-    def test_divide(self, dtypes):
+    def test_divide(self, backend_agnostic_ops, dtypes):
+        backend.config._set_use_backend_agnostic_ops(backend_agnostic_ops)
+        self.addCleanup(backend.config._set_use_backend_agnostic_ops, False)
         import jax.numpy as jnp
 
         dtype1, dtype2 = dtypes
