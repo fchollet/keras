@@ -257,6 +257,36 @@ class BatchNormalizationTest(testing.TestCase):
         self.assertAllClose(layer.moving_mean, ops.ones((4,)), atol=1e-6)
         self.assertAllClose(layer.moving_variance, ops.zeros((4,)), atol=1e-6)
 
+    @parameterized.named_parameters(("unmasked", False), ("masked", True))
+    @pytest.mark.skipif(backend.backend() != "torch", reason="Torch only test.")
+    def test_torch_compile_fullgraph(self, use_mask):
+        import torch
+
+        x = ops.convert_to_tensor(
+            np.random.normal(size=(2, 8, 4)).astype("float32")
+        )
+        mask = None
+        if use_mask:
+            mask = ops.convert_to_tensor([[True] * 6 + [False] * 2] * 2)
+        eager_layer = layers.BatchNormalization(momentum=0.0)
+        dynamo_layer = layers.BatchNormalization(momentum=0.0)
+        eager_layer.build(x.shape)
+        dynamo_layer.build(x.shape)
+
+        def call(x):
+            return dynamo_layer(x, training=True, mask=mask)
+
+        # `fullgraph=True` crashes on graph break
+        torch._dynamo.reset()
+        compiled = torch.compile(call, fullgraph=True, backend="eager")
+        self.assertAllClose(
+            compiled(x), eager_layer(x, training=True, mask=mask)
+        )
+        self.assertAllClose(dynamo_layer.moving_mean, eager_layer.moving_mean)
+        self.assertAllClose(
+            dynamo_layer.moving_variance, eager_layer.moving_variance
+        )
+
     def test_renorm_basics(self):
         # Test basic renorm functionality
         self.run_layer_test(

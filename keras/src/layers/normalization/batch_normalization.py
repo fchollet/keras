@@ -319,7 +319,9 @@ class BatchNormalization(Layer):
 
         reduction_axes = list(range(len(input_shape)))
         del reduction_axes[self.axis]
-        self._reduction_axes = reduction_axes
+        # torch compilation will cast list to TrackedList and
+        # force unnecessary graph break if used for reduction directly
+        self._reduction_axes = tuple(reduction_axes)
 
     def compute_output_shape(self, input_shape):
         if isinstance(self.axis, int):
