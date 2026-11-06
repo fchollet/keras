@@ -3022,10 +3022,18 @@ def sinc(x):
         dtype = dtypes.result_type(x.dtype, float)
     x = tf.cast(x, dtype)
     pi_x = x * tf.constant(np.pi, dtype=x.dtype)
+    # `sin(pi_x) / pi_x` is 0/0 at `x == 0`. That branch is never selected, but
+    # `where` still backpropagates through it, and `0 * nan` is `nan`, so the
+    # gradient at zero would come out as `nan` instead of the correct `0`.
+    # Substituting 1 for the denominator keeps the selected value bit-for-bit
+    # identical while making the discarded branch finite, so its gradient
+    # contribution is scaled to exactly zero.
+    is_zero = tf.equal(x, 0)
+    safe_pi_x = tf.where(is_zero, tf.ones_like(pi_x), pi_x)
     return tf.where(
-        tf.equal(x, 0),
+        is_zero,
         tf.ones_like(x),
-        tf.math.sin(pi_x) / pi_x,
+        tf.math.sin(safe_pi_x) / safe_pi_x,
     )
 
 

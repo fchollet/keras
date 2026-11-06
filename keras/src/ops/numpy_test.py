@@ -7264,6 +7264,27 @@ class NumpyOneInputOpsCorrectnessTest(testing.TestCase):
         self.assertAllClose(knp.sinc(x), np.sinc(x))
         self.assertAllClose(knp.Sinc()(x), np.sinc(x))
 
+    @pytest.mark.skipif(
+        not backend.SUPPORTS_GRADIENT,
+        reason="Backend does not support gradients.",
+    )
+    def test_sinc_gradients(self):
+        # `sin(pi * x) / (pi * x)` is 0/0 at `x == 0`. That branch is never
+        # selected, but it must still be finite so that the gradient flowing
+        # back through `where` is 0 there rather than NaN.
+        x = np.array([0.0, 0.5, 1.0, -1.5], dtype="float32")
+        pi_x = np.pi * x
+        with np.errstate(divide="ignore", invalid="ignore"):
+            expected = np.where(
+                x == 0,
+                0.0,
+                (pi_x * np.cos(pi_x) - np.sin(pi_x)) / (np.pi * x * x),
+            ).astype("float32")
+
+        x_grad = ops.grad(lambda z: knp.sinc(z))(knp.array(x))
+
+        self.assertAllClose(ops.convert_to_numpy(x_grad), expected)
+
     def test_sinh(self):
         x = np.array([[1, -2, 3], [-3, 2, -1]])
         self.assertAllClose(knp.sinh(x), np.sinh(x))
