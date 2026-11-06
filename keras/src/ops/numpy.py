@@ -3393,7 +3393,7 @@ class EmptyLike(Operation):
         self.dtype = dtype
 
     def call(self, x):
-        return backend.ops.numpy.empty_like(x, dtype=self.dtype)
+        return _empty_like(x, dtype=self.dtype)
 
     def compute_output_spec(self, x):
         dtype = standardize_dtype(x.dtype) if self.dtype is None else self.dtype
@@ -3423,7 +3423,15 @@ def empty_like(x, dtype=None):
     dtype = None if dtype is None else standardize_dtype(dtype)
     if any_symbolic_tensors((x,)):
         return EmptyLike(dtype=dtype).symbolic_call(x)
-    return backend.ops.numpy.empty_like(x, dtype=dtype)
+    return _empty_like(x, dtype=dtype)
+
+
+def _empty_like(x, dtype=None):
+    if not config._use_backend_agnostic_ops() and hasattr(
+        backend.ops.numpy, "empty_like"
+    ):
+        return backend.ops.numpy.empty_like(x, dtype=dtype)
+    return backend.ops.numpy.zeros_like(x, dtype=dtype)
 
 
 class Equal(Operation):
