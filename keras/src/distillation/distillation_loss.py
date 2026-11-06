@@ -2,8 +2,24 @@ import keras
 from keras.src import backend
 from keras.src import tree
 from keras.src.api_export import keras_export
+from keras.src.losses.losses import LossFunctionWrapper
+from keras.src.losses.losses import binary_crossentropy
+from keras.src.losses.losses import binary_focal_crossentropy
+from keras.src.losses.losses import categorical_crossentropy
+from keras.src.losses.losses import categorical_focal_crossentropy
+from keras.src.losses.losses import kl_divergence
+from keras.src.losses.losses import sparse_categorical_crossentropy
 from keras.src.saving import serialization_lib
 from keras.src.utils import tracking
+
+# Losses that need targets `LogitsDistillation` cannot derive from the
+# teacher logits (class indices, or independent per-class probabilities).
+_UNSUPPORTED_LOGITS_LOSSES = (
+    sparse_categorical_crossentropy,
+    binary_crossentropy,
+    binary_focal_crossentropy,
+    categorical_focal_crossentropy,
+)
 
 
 def _convert_loss_to_function(loss_item):
@@ -28,6 +44,13 @@ def _convert_loss_to_function(loss_item):
         return loss_fn
     else:
         return loss_item
+
+
+def _unwrap_loss_fn(loss_fn):
+    """Return the function a built-in loss instance wraps, or `loss_fn`."""
+    if isinstance(loss_fn, LossFunctionWrapper):
+        return loss_fn.fn
+    return loss_fn
 
 
 @keras_export("keras.distillation.DistillationLoss")
@@ -281,6 +304,13 @@ class LogitsDistillation(DistillationLoss):
               multi-output models where you only want to distill some outputs)
             At least one loss must be non-`None`. Defaults to 'kl_divergence'.
 
+    KL divergence and categorical crossentropy losses take the teacher
+    probabilities `softmax(teacher_logits / temperature)` as the target and
+    the student predictions at the same temperature. Their result is scaled
+    by `temperature**2`. All other losses take the temperature-scaled logits
+    of both models. Sparse categorical, binary and focal crossentropy losses
+    are not supported.
+
     Examlpe(s):
 
     ```python
@@ -325,6 +355,17 @@ class LogitsDistillation(DistillationLoss):
         flat_losses = tree.flatten(self.loss)
         if all(l is None for l in flat_losses):
             raise ValueError("At least one loss must be non-`None`.")
+        for loss_fn in flat_losses:
+            if _unwrap_loss_fn(loss_fn) in _UNSUPPORTED_LOGITS_LOSSES:
+                loss_name = getattr(
+                    loss_fn, "name", getattr(loss_fn, "__name__", loss_fn)
+                )
+                raise ValueError(
+                    f"`LogitsDistillation` does not support the loss "
+                    f"'{loss_name}'. Its targets cannot be derived from the "
+                    f"teacher logits. Use 'kl_divergence' or "
+                    f"'categorical_crossentropy' instead."
+                )
 
         if not isinstance(self.temperature, (int, float)):
             raise ValueError(
@@ -360,20 +401,34 @@ class LogitsDistillation(DistillationLoss):
             if loss_fn is None:
                 return 0.0
 
-            # Special handling for KL divergence (needs probabilities)
-            if isinstance(loss_fn, keras.losses.KLDivergence):
+            fn = _unwrap_loss_fn(loss_fn)
+            if fn is kl_divergence:
+                # KL divergence needs probabilities for both models.
                 teacher_probs = backend.ops.nn.softmax(teacher_logits, axis=-1)
                 student_probs = backend.ops.nn.softmax(student_logits, axis=-1)
-                loss = backend.ops.numpy.mean(
-                    loss_fn(teacher_probs, student_probs)
-                )
-                # Scale by temperature^2 for KL (per literature)
-                return loss * (self.temperature**2)
+                loss = loss_fn(teacher_probs, student_probs)
+            elif fn is categorical_crossentropy:
+                # Crossentropy needs teacher probabilities as the target.
+                teacher_probs = backend.ops.nn.softmax(teacher_logits, axis=-1)
+                if loss_fn is fn:
+                    loss = loss_fn(
+                        teacher_probs, student_logits, from_logits=True
+                    )
+                elif getattr(loss_fn, "from_logits", False):
+                    loss = loss_fn(teacher_probs, student_logits)
+                else:
+                    student_probs = backend.ops.nn.softmax(
+                        student_logits, axis=-1
+                    )
+                    loss = loss_fn(teacher_probs, student_probs)
             else:
                 # For other losses, use logits directly
                 return backend.ops.numpy.mean(
                     loss_fn(teacher_logits, student_logits)
                 )
+            # Scale by temperature^2 to keep the gradient magnitude
+            # independent of the temperature (per literature)
+            return backend.ops.numpy.mean(loss) * (self.temperature**2)
 
         # Apply losses using tree.map_structure
         loss_values = tree.map_structure(

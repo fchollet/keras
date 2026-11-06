@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+from absl.testing import parameterized
 
 import keras
 from keras.src.distillation.distillation_loss import FeatureDistillation
@@ -29,6 +30,118 @@ class TestLogitsDistillation(TestCase):
             distillation_loss.validate_outputs(
                 teacher_logits, incompatible_logits
             )
+
+    @parameterized.named_parameters(
+        ("kl_string", "kl_divergence", False),
+        ("kl_instance", keras.losses.KLDivergence(), False),
+        ("ce_string", "categorical_crossentropy", True),
+        (
+            "ce_instance_from_logits",
+            keras.losses.CategoricalCrossentropy(from_logits=True),
+            True,
+        ),
+        (
+            "ce_instance_from_probs",
+            keras.losses.CategoricalCrossentropy(),
+            True,
+        ),
+    )
+    def test_logits_distillation_loss_values(self, loss, includes_entropy):
+        temperature = 2.0
+        teacher = np.array([[5.0, 0.0, -3.0], [1.0, 2.0, 0.5]], "float32")
+        student = np.array([[0.0, 2.0, 1.0], [1.5, 0.0, 2.0]], "float32")
+        distillation_loss = LogitsDistillation(
+            temperature=temperature, loss=loss
+        )
+
+        def softmax(x):
+            e = np.exp(x - x.max(axis=-1, keepdims=True))
+            return e / e.sum(axis=-1, keepdims=True)
+
+        p_teacher = softmax(teacher / temperature)
+        p_student = softmax(student / temperature)
+        entropy = -np.sum(p_teacher * np.log(p_teacher), axis=-1).mean()
+        kl = np.sum(p_teacher * np.log(p_teacher / p_student), axis=-1).mean()
+        offset = entropy if includes_entropy else 0.0
+
+        # A student that matches the teacher has zero KL divergence and a
+        # crossentropy equal to the teacher entropy.
+        matched = distillation_loss.compute_loss(teacher, teacher)
+        self.assertAllClose(
+            matched, temperature**2 * offset, atol=1e-6, rtol=1e-6
+        )
+        mismatched = distillation_loss.compute_loss(teacher, student)
+        self.assertAllClose(
+            mismatched, temperature**2 * (kl + offset), atol=1e-5, rtol=1e-5
+        )
+
+        # Both losses have the gradient `T * (p_student - p_teacher) / N`.
+        expected_grad = temperature * (p_student - p_teacher) / len(student)
+        grad = _student_gradient(distillation_loss, teacher, student)
+        self.assertTrue(np.all(np.isfinite(grad)))
+        self.assertAllClose(grad, expected_grad, atol=1e-5, rtol=1e-5)
+        matched_grad = _student_gradient(distillation_loss, teacher, teacher)
+        self.assertTrue(np.all(np.isfinite(matched_grad)))
+        self.assertAllClose(matched_grad, np.zeros_like(teacher), atol=1e-6)
+
+    def test_logits_distillation_multi_output(self):
+        temperature = 3.0
+        teacher = np.array([[5.0, 0.0, -3.0]], "float32")
+        distillation_loss = LogitsDistillation(
+            temperature=temperature,
+            loss=["kl_divergence", "categorical_crossentropy"],
+        )
+        p_teacher = np.exp(teacher / temperature)
+        p_teacher /= p_teacher.sum()
+        entropy = -np.sum(p_teacher * np.log(p_teacher))
+
+        loss = distillation_loss.compute_loss(
+            [teacher, teacher], [teacher, teacher]
+        )
+        self.assertAllClose(loss, temperature**2 * entropy, atol=1e-5)
+
+    @parameterized.named_parameters(
+        ("sparse_ce_string", "sparse_categorical_crossentropy"),
+        (
+            "sparse_ce_instance",
+            keras.losses.SparseCategoricalCrossentropy(from_logits=True),
+        ),
+        ("binary_ce_string", "binary_crossentropy"),
+        ("categorical_focal_string", "categorical_focal_crossentropy"),
+    )
+    def test_logits_distillation_rejects_unsupported_loss(self, loss):
+        with self.assertRaisesRegex(ValueError, "does not support the loss"):
+            LogitsDistillation(loss=loss)
+        with self.assertRaisesRegex(ValueError, "does not support the loss"):
+            LogitsDistillation(loss=["kl_divergence", loss])
+
+
+def _student_gradient(distillation_loss, teacher, student):
+    """Gradient of `distillation_loss` with respect to the student logits."""
+    backend = keras.backend.backend()
+    if backend == "jax":
+        import jax
+
+        grad = jax.grad(lambda s: distillation_loss.compute_loss(teacher, s))(
+            student
+        )
+    elif backend == "tensorflow":
+        import tensorflow as tf
+
+        student = tf.constant(student)
+        with tf.GradientTape() as tape:
+            tape.watch(student)
+            loss = distillation_loss.compute_loss(teacher, student)
+        grad = tape.gradient(loss, student)
+    elif backend == "torch":
+        import torch
+
+        student = torch.tensor(student, requires_grad=True)
+        distillation_loss.compute_loss(teacher, student).backward()
+        grad = student.grad
+    else:
+        raise NotImplementedError(f"No gradient helper for {backend}.")
+    return keras.ops.convert_to_numpy(grad)
 
 
 @pytest.mark.requires_trainable_backend
