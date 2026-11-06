@@ -1,3 +1,6 @@
+import contextlib
+import io
+import json
 import os
 import zipfile
 from unittest import mock
@@ -221,3 +224,36 @@ class SavingTest(testing.TestCase):
         ):
             with self.assertRaisesRegex(ValueError, "decompression bomb"):
                 KerasFileEditor(bomb_fpath)
+
+    def test_file_content_is_not_parsed_as_markup(self):
+        # Metadata fields and H5 names come from the opened file and must be
+        # printed literally rather than parsed as Rich markup.
+        model = keras.Sequential(
+            [keras.Input(shape=(3,)), keras.layers.Dense(5)]
+        )
+        good_fpath = os.path.join(self.get_temp_dir(), "good.keras")
+        model.save(good_fpath)
+        with zipfile.ZipFile(good_fpath) as zf:
+            config = zf.read(saving_lib._CONFIG_FILENAME)
+            metadata = json.loads(zf.read(saving_lib._METADATA_FILENAME))
+            weights = io.BytesIO(zf.read(saving_lib._VARS_FNAME_H5))
+
+        metadata["keras_version"] = "[red]9.9.9"
+        with h5py.File(weights, "a") as f:
+            f["layers"].move("dense", "[red]dense")
+
+        markup_fpath = os.path.join(self.get_temp_dir(), "markup.keras")
+        with zipfile.ZipFile(markup_fpath, "w") as zf:
+            zf.writestr(saving_lib._CONFIG_FILENAME, config)
+            zf.writestr(saving_lib._METADATA_FILENAME, json.dumps(metadata))
+            zf.writestr(saving_lib._VARS_FNAME_H5, weights.getvalue())
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            editor = KerasFileEditor(markup_fpath)
+            editor.summary()
+            editor.compare(model)
+        output = output.getvalue()
+        self.assertIn("Saved with Keras [red]9.9.9", output)
+        self.assertIn("─ [red]dense", output)
+        self.assertIn("/layers/[red]dense", output)
