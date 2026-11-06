@@ -294,7 +294,8 @@ def rsqrt(x):
 
 
 def erf(x):
-    return jax.lax.erf(x)
+    x = convert_to_tensor(x)
+    return jax.scipy.special.erf(x)
 
 
 def erfc(x):

@@ -323,7 +323,7 @@ def rsqrt(x):
 
 
 def erf(x):
-    dtype = dtypes.result_type(x.dtype)
+    dtype = dtypes.result_type(x.dtype, float)
     return scipy.special.erf(x).astype(dtype)
 
 
