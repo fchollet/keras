@@ -15,6 +15,7 @@ from keras.src import random
 from keras.src import testing
 from keras.src import tree
 from keras.src.export import saved_model
+from keras.src.export import xla_saved_model_archive
 from keras.src.saving import saving_lib
 from keras.src.testing.test_utils import named_product
 
@@ -1231,4 +1232,235 @@ class ExportArchiveTest(testing.TestCase):
             ref_output,
             tpu_atol=0.01,
             tpu_rtol=0.01,
+        )
+
+
+@pytest.mark.skipif(
+    backend.backend() != "jax",
+    reason="`export_xla_saved_model` only supports the JAX backend.",
+)
+@pytest.mark.skipif(
+    not xla_saved_model_archive.xla_saved_model.available,
+    reason="Requires the `xla_saved_model` package.",
+)
+class ExportXLASavedModelTest(testing.TestCase):
+    """Tests for `export_xla_saved_model` / `model.export("xla_saved_model")`.
+
+    The `XLASavedModelArchive` itself is covered in
+    `xla_saved_model_archive_test.py`; these tests cover the high-level
+    export entry points in `saved_model.py` and `Model.export()`.
+    """
+
+    def _load_serve(self, filepath, signature="serve"):
+        # Reloads the exported function as `fn(params, inputs)` and the
+        # Orbax checkpoint it references, as the XLA Serving Engine does.
+        from keras.src.export import xla_saved_model_archive_test
+
+        return xla_saved_model_archive_test.load_endpoint(filepath, signature)
+
+    @parameterized.named_parameters(
+        named_product(model_type=["sequential", "functional", "subclass"])
+    )
+    def test_standard_model_export(self, model_type):
+        temp_filepath = os.path.join(self.get_temp_dir(), "exported_model")
+        model = get_model(model_type)
+        ref_input = np.random.normal(size=(3, 10)).astype("float32")
+        ref_output = model(ref_input)
+
+        # The input signature is inferred from the model.
+        saved_model.export_xla_saved_model(
+            model, temp_filepath, platforms=["cpu"]
+        )
+        self.assertTrue(
+            os.path.isfile(os.path.join(temp_filepath, "manifest.pb"))
+        )
+        self.assertTrue(
+            os.path.isdir(os.path.join(temp_filepath, "checkpoint"))
+        )
+        # Registered as "serve" and aliased as "serving_default".
+        for signature in ("serve", "serving_default"):
+            apply_fn, params = self._load_serve(temp_filepath, signature)
+            self.assertAllClose(
+                apply_fn(params, {"inputs": ref_input})["output_0"],
+                ref_output,
+            )
+        # Test with a different batch size
+        apply_fn, params = self._load_serve(temp_filepath)
+        other_input = np.random.normal(size=(6, 10)).astype("float32")
+        self.assertAllClose(
+            apply_fn(params, {"inputs": other_input})["output_0"],
+            model(other_input),
+        )
+
+    @parameterized.named_parameters(
+        named_product(
+            model_type=["sequential", "functional", "subclass"],
+            input_signature=[
+                layers.InputSpec(
+                    dtype="float32", shape=(None, 10), name="inputs"
+                ),
+                tf.TensorSpec((None, 10), dtype="float32", name="inputs"),
+                backend.KerasTensor((None, 10), dtype="float32", name="inputs"),
+                "backend_tensor",
+            ],
+        )
+    )
+    def test_input_signature(self, model_type, input_signature):
+        temp_filepath = os.path.join(self.get_temp_dir(), "exported_model")
+        model = get_model(model_type)
+        ref_input = random.normal((3, 10))
+        ref_output = model(ref_input)
+
+        if input_signature == "backend_tensor":
+            input_signature = (ref_input,)
+        else:
+            input_signature = (input_signature,)
+        saved_model.export_xla_saved_model(
+            model,
+            temp_filepath,
+            input_signature=input_signature,
+            platforms=["cpu"],
+        )
+        apply_fn, params = self._load_serve(temp_filepath)
+        self.assertAllClose(
+            apply_fn(params, {"inputs": ops.convert_to_numpy(ref_input)})[
+                "output_0"
+            ],
+            ref_output,
+        )
+
+    def test_model_with_multiple_inputs(self):
+        class TupleModel(models.Model):
+            def __init__(self):
+                super().__init__()
+                self.dense = layers.Dense(4)
+
+            def call(self, inputs):
+                x, y = inputs
+                return self.dense(ops.add(x, y))
+
+        temp_filepath = os.path.join(self.get_temp_dir(), "exported_model")
+        model = TupleModel()
+        ref_inputs = (
+            np.random.normal(size=(3, 10)).astype("float32"),
+            np.random.normal(size=(3, 10)).astype("float32"),
+        )
+        ref_output = model(ref_inputs)
+
+        saved_model.export_xla_saved_model(
+            model,
+            temp_filepath,
+            input_signature=[
+                (
+                    layers.InputSpec(
+                        shape=(None, 10), dtype="float32", name="x"
+                    ),
+                    layers.InputSpec(
+                        shape=(None, 10), dtype="float32", name="y"
+                    ),
+                )
+            ],
+            platforms=["cpu"],
+        )
+        apply_fn, params = self._load_serve(temp_filepath)
+        self.assertAllClose(
+            apply_fn(params, {"x": ref_inputs[0], "y": ref_inputs[1]})[
+                "output_0"
+            ],
+            ref_output,
+        )
+
+    def test_verbose(self):
+        temp_filepath = os.path.join(self.get_temp_dir(), "exported_model")
+        model = get_model("sequential")
+        model.build((None, 10))
+        # `verbose=None` defaults to True and prints the endpoints; both
+        # settings must export successfully.
+        saved_model.export_xla_saved_model(
+            model, temp_filepath, verbose=None, platforms=["cpu"]
+        )
+        saved_model.export_xla_saved_model(
+            model, temp_filepath, verbose=False, platforms=["cpu"]
+        )
+        self.assertTrue(
+            os.path.isfile(os.path.join(temp_filepath, "manifest.pb"))
+        )
+
+    def test_export_xla_saved_model_errors(self):
+        temp_filepath = os.path.join(self.get_temp_dir(), "exported_model")
+
+        # Model has not been built
+        model = models.Sequential([layers.Dense(2)])
+        with self.assertRaisesRegex(ValueError, "It must be built"):
+            saved_model.export_xla_saved_model(model, temp_filepath)
+
+        # Subclassed model has not been called
+        model = get_model("subclass")
+        model.build((2, 10))
+        with self.assertRaisesRegex(ValueError, "It must be called"):
+            saved_model.export_xla_saved_model(model, temp_filepath)
+
+        # Unsupported input signature element
+        model = get_model("functional")
+        with self.assertRaisesRegex(TypeError, "Unsupported x="):
+            saved_model.export_xla_saved_model(
+                model, temp_filepath, input_signature=(123,)
+            )
+
+        # TF SavedModel-only kwargs are rejected
+        with self.assertRaisesRegex(ValueError, "Unsupported keyword arg"):
+            saved_model.export_xla_saved_model(
+                model, temp_filepath, jax2tf_kwargs={}
+            )
+        with self.assertRaisesRegex(ValueError, "Unsupported keyword arg"):
+            saved_model.export_xla_saved_model(
+                model, temp_filepath, is_static=True
+            )
+
+    @parameterized.named_parameters(
+        named_product(model_type=["sequential", "functional", "subclass"])
+    )
+    def test_model_export_method(self, model_type):
+        temp_filepath = os.path.join(self.get_temp_dir(), "exported_model")
+        model = get_model(model_type)
+        ref_input = np.random.normal(size=(3, 10)).astype("float32")
+        ref_output = model(ref_input)
+
+        model.export(temp_filepath, format="xla_saved_model", platforms=["cpu"])
+        apply_fn, params = self._load_serve(temp_filepath)
+        self.assertAllClose(
+            apply_fn(params, {"inputs": ref_input})["output_0"], ref_output
+        )
+        # Test with a different batch size
+        other_input = np.random.normal(size=(6, 10)).astype("float32")
+        self.assertAllClose(
+            apply_fn(params, {"inputs": other_input})["output_0"],
+            model(other_input),
+        )
+
+    def test_model_export_method_forwards_kwargs(self):
+        temp_filepath = os.path.join(self.get_temp_dir(), "exported_model")
+        model = get_model("sequential")
+        model.build((None, 10))
+        model.export(
+            temp_filepath,
+            format="xla_saved_model",
+            verbose=False,
+            input_signature=[
+                layers.InputSpec(shape=(None, 10), dtype="float32", name="x")
+            ],
+            platforms=["cpu"],
+            warmup_examples=[{"x": np.zeros((1, 10), dtype="float32")}],
+        )
+        self.assertTrue(
+            os.path.isfile(
+                os.path.join(
+                    temp_filepath, "assets.extra", "xla_serving_warmup_requests"
+                )
+            )
+        )
+        apply_fn, params = self._load_serve(temp_filepath)
+        ref_input = np.random.normal(size=(2, 10)).astype("float32")
+        self.assertAllClose(
+            apply_fn(params, {"x": ref_input})["output_0"], model(ref_input)
         )

@@ -35,3 +35,8 @@ grain
 orbax-checkpoint
 # for remote file access
 etils[epath]
+# for xla_saved_model_archive_test.py (XLA Serving Engine export)
+xla-saved-model>=0.0.13
+# Optional C++ runtime used by the serving round-trip tests; binary wheels are
+# only published for Python >= 3.12 on x86_64 Linux.
+xla-saved-model-runner>=0.0.13; python_version >= "3.12" and sys_platform == "linux" and platform_machine == "x86_64"
