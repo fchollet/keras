@@ -757,6 +757,8 @@ def compute_homography_matrix(start_points, end_points):
 
 
 def _mirror_index_fixer(index, size):
+    if size == 1:
+        return torch.zeros_like(index)
     s = size - 1  # Half-wavelength of triangular wave
     if s == 0:
         # A size 1 axis mirrors every index onto its only element.
