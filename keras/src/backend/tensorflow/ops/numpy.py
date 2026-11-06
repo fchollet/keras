@@ -3490,6 +3490,13 @@ def vstack(xs):
     if len(dtype_set) > 1:
         dtype = dtypes.result_type(*dtype_set)
         xs = tree.map_structure(lambda x: convert_to_tensor(x, dtype), xs)
+    # `np.vstack` applies `atleast_2d` to every input, so a 1-D input becomes a
+    # single row and a scalar becomes a `(1, 1)` row. Concatenating directly
+    # would flatten a 1-D input to `(n * len(xs),)`, and mixing a 1-D input with
+    # a 2-D one would fail outright. `atleast_2d` also handles inputs whose rank
+    # is not known statically, which `x.shape.rank == 1` would miss.
+    xs = [convert_to_tensor(x) for x in xs]
+    xs = [tf.experimental.numpy.atleast_2d(x) for x in xs]
     return tf.concat(xs, axis=0)
 
 

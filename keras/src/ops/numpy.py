@@ -8935,21 +8935,30 @@ class Vstack(Operation):
         return backend.ops.numpy.vstack(xs)
 
     def compute_output_spec(self, xs):
-        first_shape = xs[0].shape
+        # `np.vstack` applies `atleast_2d` to every input first, so `(n,)`
+        # behaves as `(1, n)` and a scalar `()` behaves as `(1, 1)`.
+        def as_rows(shape):
+            shape = tuple(shape)
+            if not shape:
+                return (1, 1)
+            return (1,) + shape if len(shape) == 1 else shape
+
+        shapes = [as_rows(x.shape) for x in xs]
+        first_shape = shapes[0]
         total_size_on_axis = 0
         dtypes_to_resolve = []
-        for x in xs:
-            if not shape_equal(x.shape, first_shape, axis=[0], allow_none=True):
+        for shape, x in zip(shapes, xs):
+            if not shape_equal(shape, first_shape, axis=[0], allow_none=True):
                 raise ValueError(
                     "Every value in `xs` must have the same shape except on "
                     f"the `axis` dim. But found element of shape {x.shape}, "
                     f"which is different from the first element's "
-                    f"shape {first_shape}."
+                    f"shape {xs[0].shape}."
                 )
-            if total_size_on_axis is None or x.shape[0] is None:
+            if total_size_on_axis is None or shape[0] is None:
                 total_size_on_axis = None
             else:
-                total_size_on_axis += x.shape[0]
+                total_size_on_axis += shape[0]
             dtypes_to_resolve.append(getattr(x, "dtype", type(x)))
         output_shape = list(first_shape)
         output_shape[0] = total_size_on_axis
