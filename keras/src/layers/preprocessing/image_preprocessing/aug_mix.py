@@ -1,5 +1,3 @@
-import random as py_random
-
 import keras.src.layers as layers
 from keras.src.api_export import keras_export
 from keras.src.layers.preprocessing.image_preprocessing.base_image_preprocessing_layer import (  # noqa: E501
@@ -10,6 +8,7 @@ from keras.src.layers.preprocessing.image_preprocessing.base_image_preprocessing
 )
 from keras.src.random import SeedGenerator
 from keras.src.utils import backend_utils
+from keras.src.utils import jax_utils
 
 AUGMENT_LAYERS_ALL = [
     "random_shear",
@@ -235,36 +234,72 @@ class AugMix(BaseImagePreprocessingLayer):
             seed=seed,
         )
 
-        chain_transforms = []
-        for _ in range(self.num_chains):
-            depth_transforms = []
-            for _ in range(self.chain_depth):
-                layer_name = py_random.choice(self._augment_layers + [None])
-                if layer_name is None:
-                    continue
-                augmentation_layer = getattr(self, layer_name)
-                depth_transforms.append(
-                    {
-                        "layer_name": layer_name,
-                        "transformation": (
-                            augmentation_layer.get_random_transformation(
-                                data,
-                                seed=self._get_seed_generator(
-                                    self.backend._backend
-                                ),
-                            )
-                        ),
-                    }
-                )
-            chain_transforms.append(depth_transforms)
+        layer_idxes = self.backend.random.randint(
+            (self.num_chains, self.chain_depth),
+            0,
+            len(self._augment_layers) + 1,
+            seed=seed,
+        )
+        if self._is_tracing(layer_idxes):
+            chain_transforms = [
+                [
+                    self._sample_layer_transformations(data)
+                    for _ in range(self.chain_depth)
+                ]
+                for _ in range(self.num_chains)
+            ]
+        else:
+            chain_transforms = [
+                [
+                    self._sample_layer_transformations(
+                        data, selected=int(layer_idxes[i][j])
+                    )
+                    for j in range(self.chain_depth)
+                ]
+                for i in range(self.num_chains)
+            ]
 
-        transformation = {
+        return {
             "chain_mixing_weights": chain_mixing_weights,
             "weight_sample": weight_sample,
+            "layer_idxes": layer_idxes,
             "chain_transforms": chain_transforms,
         }
 
-        return transformation
+    def _sample_layer_transformations(self, data, selected=None):
+        return [
+            getattr(self, layer_name).get_random_transformation(
+                data, seed=self._get_seed_generator(self.backend._backend)
+            )
+            if selected is None or idx == selected
+            else None
+            for idx, layer_name in enumerate(self._augment_layers)
+        ]
+
+    def _is_tracing(self, layer_idx):
+        if backend_utils.in_tf_graph():
+            return True
+        return jax_utils.is_in_jax_tracing_scope(layer_idx)
+
+    def _apply_selected_layer(self, inputs, transforms, layer_idx, method):
+        dtype = self.backend.standardize_dtype(inputs.dtype)
+
+        def make_branch(layer_name, transformation):
+            layer = getattr(self, layer_name)
+            transform = getattr(layer, method)
+            return lambda x: self.backend.ops.cast(
+                transform(x, transformation), dtype
+            )
+
+        branches = [
+            make_branch(layer_name, transforms[idx])
+            for idx, layer_name in enumerate(self._augment_layers)
+        ]
+        branches.append(lambda x: self.backend.ops.cast(x, dtype))
+
+        if self._is_tracing(layer_idx):
+            return self.backend.ops.switch(layer_idx, branches, inputs)
+        return branches[int(layer_idx)](inputs)
 
     def transform_images(self, images, transformation, training=True):
         if training:
@@ -276,18 +311,18 @@ class AugMix(BaseImagePreprocessingLayer):
             weight_sample = self.backend.ops.cast(
                 transformation["weight_sample"], dtype=self.compute_dtype
             )
+            layer_idxes = transformation["layer_idxes"]
             chain_transforms = transformation["chain_transforms"]
 
             aug_images = self.backend.ops.numpy.zeros_like(images)
             for idx, chain_transform in enumerate(chain_transforms):
                 copied_images = self.backend.ops.numpy.copy(images)
-                for depth_transform in chain_transform:
-                    layer_name = depth_transform["layer_name"]
-                    layer_transform = depth_transform["transformation"]
-
-                    augmentation_layer = getattr(self, layer_name)
-                    copied_images = augmentation_layer.transform_images(
-                        copied_images, layer_transform
+                for depth, transforms in enumerate(chain_transform):
+                    copied_images = self._apply_selected_layer(
+                        copied_images,
+                        transforms,
+                        layer_idxes[idx][depth],
+                        "transform_images",
                     )
                 aug_images += copied_images * chain_mixing_weights[idx]
             images = weight_sample * images + (1 - weight_sample) * aug_images
@@ -320,20 +355,18 @@ class AugMix(BaseImagePreprocessingLayer):
             weight_sample = self.backend.ops.cast(
                 transformation["weight_sample"], dtype=self.compute_dtype
             )
+            layer_idxes = transformation["layer_idxes"]
             chain_transforms = transformation["chain_transforms"]
 
             aug_masks = self.backend.ops.numpy.zeros_like(segmentation_masks)
             for idx, chain_transform in enumerate(chain_transforms):
                 copied_masks = self.backend.ops.numpy.copy(segmentation_masks)
-                for depth_transform in chain_transform:
-                    layer_name = depth_transform["layer_name"]
-                    layer_transform = depth_transform["transformation"]
-
-                    augmentation_layer = getattr(self, layer_name)
-                    copied_masks = (
-                        augmentation_layer.transform_segmentation_masks(
-                            copied_masks, layer_transform
-                        )
+                for depth, transforms in enumerate(chain_transform):
+                    copied_masks = self._apply_selected_layer(
+                        copied_masks,
+                        transforms,
+                        layer_idxes[idx][depth],
+                        "transform_segmentation_masks",
                     )
                 aug_masks += copied_masks * chain_mixing_weights[idx]
             segmentation_masks = (
