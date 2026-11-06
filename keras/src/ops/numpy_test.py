@@ -7626,6 +7626,25 @@ class NumpyOneInputOpsCorrectnessTest(testing.TestCase):
         self.assertAllClose(knp.tril(x, -1), np.tril(x, -1))
         self.assertAllClose(knp.Tril(-1)(x), np.tril(x, -1))
 
+        # `k` at or beyond the matrix size.
+        x = np.arange(12).reshape([3, 4])
+        for k in (-5, -4, 4, 5):
+            self.assertAllClose(knp.tril(x, k), np.tril(x, k))
+
+    @pytest.mark.skipif(
+        backend.backend() != "tensorflow",
+        reason="Only test tensorflow backend",
+    )
+    def test_tril_triu_with_tensor_k_in_tf(self):
+        import tensorflow as tf
+
+        x = np.arange(12).reshape([3, 4])
+        for dtype in ("int32", "int64"):
+            for k in (-5, -1, 0, 1, 5):
+                k_tensor = tf.constant(k, dtype)
+                self.assertAllClose(knp.tril(x, k_tensor), np.tril(x, k))
+                self.assertAllClose(knp.triu(x, k_tensor), np.triu(x, k))
+
     def test_tril_in_layer(self):
         # https://github.com/keras-team/keras/issues/18890
         x = keras.Input((None, 3))
@@ -7676,6 +7695,11 @@ class NumpyOneInputOpsCorrectnessTest(testing.TestCase):
         self.assertAllClose(knp.triu(x), np.triu(x))
         self.assertAllClose(knp.triu(x, -1), np.triu(x, -1))
         self.assertAllClose(knp.Triu(-1)(x), np.triu(x, -1))
+
+        # `k` at or beyond the matrix size.
+        x = np.arange(12).reshape([3, 4])
+        for k in (-5, -4, 4, 5):
+            self.assertAllClose(knp.triu(x, k), np.triu(x, k))
 
     def test_triu_in_layer(self):
         # https://github.com/keras-team/keras/issues/18890
