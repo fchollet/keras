@@ -1,7 +1,6 @@
 import math
 
 from keras.src import backend
-from keras.src import ops
 from keras.src.api_export import keras_export
 from keras.src.backend.common.keras_tensor import KerasTensor
 from keras.src.layers.input_spec import InputSpec
@@ -40,12 +39,14 @@ class Flatten(Layer):
         self._channels_first = self.data_format == "channels_first"
 
     def call(self, inputs):
-        input_shape = ops.shape(inputs)
+        input_shape = backend.ops.shape(inputs)
         rank = len(input_shape)
 
         if self._channels_first and rank > 1:
             # Switch to channels-last format.
-            inputs = ops.transpose(inputs, axes=(0, *range(2, rank), 1))
+            inputs = backend.ops.numpy.transpose(
+                inputs, axes=(0, *range(2, rank), 1)
+            )
 
         non_batch_dims = input_shape[1:]
         if len(non_batch_dims) == 0:
@@ -55,7 +56,9 @@ class Flatten(Layer):
         else:
             flattened_dim = math.prod(non_batch_dims)
 
-        return ops.reshape(inputs, (input_shape[0], flattened_dim))
+        return backend.ops.numpy.reshape(
+            inputs, (input_shape[0], flattened_dim)
+        )
 
     def compute_output_shape(self, input_shape):
         non_batch_dims = input_shape[1:]

@@ -1,5 +1,4 @@
 from keras.src import backend
-from keras.src import ops
 from keras.src.api_export import keras_export
 from keras.src.layers.input_spec import InputSpec
 from keras.src.layers.layer import Layer
@@ -121,14 +120,14 @@ class UpSampling3D(Layer):
             Resized tensor.
         """
         if data_format == "channels_first":
-            output = ops.repeat(x, depth_factor, axis=2)
-            output = ops.repeat(output, height_factor, axis=3)
-            output = ops.repeat(output, width_factor, axis=4)
+            output = backend.ops.numpy.repeat(x, depth_factor, axis=2)
+            output = backend.ops.numpy.repeat(output, height_factor, axis=3)
+            output = backend.ops.numpy.repeat(output, width_factor, axis=4)
             return output
         elif data_format == "channels_last":
-            output = ops.repeat(x, depth_factor, axis=1)
-            output = ops.repeat(output, height_factor, axis=2)
-            output = ops.repeat(output, width_factor, axis=3)
+            output = backend.ops.numpy.repeat(x, depth_factor, axis=1)
+            output = backend.ops.numpy.repeat(output, height_factor, axis=2)
+            output = backend.ops.numpy.repeat(output, width_factor, axis=3)
             return output
         else:
             raise ValueError(f"Invalid data_format: {data_format}")

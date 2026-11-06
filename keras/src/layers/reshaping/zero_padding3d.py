@@ -1,5 +1,4 @@
 from keras.src import backend
-from keras.src import ops
 from keras.src.api_export import keras_export
 from keras.src.layers.input_spec import InputSpec
 from keras.src.layers.layer import Layer
@@ -110,7 +109,7 @@ class ZeroPadding3D(Layer):
             all_dims_padding = ((0, 0), (0, 0), *self.padding)
         else:
             all_dims_padding = ((0, 0), *self.padding, (0, 0))
-        return ops.pad(inputs, all_dims_padding)
+        return backend.ops.numpy.pad(inputs, all_dims_padding)
 
     def get_config(self):
         config = {"padding": self.padding, "data_format": self.data_format}

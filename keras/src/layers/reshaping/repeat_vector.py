@@ -1,4 +1,4 @@
-from keras.src import ops
+from keras.src import backend
 from keras.src.api_export import keras_export
 from keras.src.layers.input_spec import InputSpec
 from keras.src.layers.layer import Layer
@@ -42,9 +42,11 @@ class RepeatVector(Layer):
         return (input_shape[0], self.n, input_shape[1])
 
     def call(self, inputs):
-        input_shape = ops.shape(inputs)
-        reshaped = ops.reshape(inputs, (input_shape[0], 1, input_shape[1]))
-        return ops.repeat(reshaped, self.n, axis=1)
+        input_shape = backend.ops.shape(inputs)
+        reshaped = backend.ops.numpy.reshape(
+            inputs, (input_shape[0], 1, input_shape[1])
+        )
+        return backend.ops.numpy.repeat(reshaped, self.n, axis=1)
 
     def get_config(self):
         config = {"n": self.n}

@@ -1,4 +1,4 @@
-from keras.src import ops
+from keras.src import backend
 from keras.src.api_export import keras_export
 from keras.src.layers.input_spec import InputSpec
 from keras.src.layers.layer import Layer
@@ -61,7 +61,7 @@ class UpSampling1D(Layer):
         return [input_shape[0], size, input_shape[2]]
 
     def call(self, inputs):
-        return ops.repeat(x=inputs, repeats=self.size, axis=1)
+        return backend.ops.numpy.repeat(x=inputs, repeats=self.size, axis=1)
 
     def get_config(self):
         config = {"size": self.size}

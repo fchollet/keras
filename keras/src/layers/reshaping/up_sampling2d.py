@@ -144,12 +144,12 @@ class UpSampling2D(Layer):
             raise ValueError(f"Invalid `data_format` argument: {data_format}")
 
         if data_format == "channels_first":
-            x = ops.transpose(x, [0, 2, 3, 1])
+            x = backend.ops.numpy.transpose(x, [0, 2, 3, 1])
         # https://github.com/keras-team/keras/issues/294
         # Use `ops.repeat` for `nearest` interpolation to enable XLA
         if interpolation == "nearest":
-            x = ops.repeat(x, height_factor, axis=1)
-            x = ops.repeat(x, width_factor, axis=2)
+            x = backend.ops.numpy.repeat(x, height_factor, axis=1)
+            x = backend.ops.numpy.repeat(x, width_factor, axis=2)
         else:
             # multiply the height and width factor on each dim
             # by hand (versus using element-wise multiplication
@@ -158,7 +158,7 @@ class UpSampling2D(Layer):
             # since when running under torchdynamo, `new_shape`
             # will be traced as a symbolic variable (specifically
             # a `FakeTensor`) which does not have a `tolist()` method.
-            shape = ops.shape(x)
+            shape = backend.ops.shape(x)
             new_shape = (
                 shape[1] * height_factor,
                 shape[2] * width_factor,
@@ -170,6 +170,6 @@ class UpSampling2D(Layer):
                 interpolation=interpolation,
             )
         if data_format == "channels_first":
-            x = ops.transpose(x, [0, 3, 1, 2])
+            x = backend.ops.numpy.transpose(x, [0, 3, 1, 2])
 
         return x
