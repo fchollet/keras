@@ -3,13 +3,17 @@ import itertools
 import math
 
 import numpy as np
+import pytest
 from absl.testing import parameterized
 
+from keras.src import backend
+from keras.src import layers
 from keras.src import ops
 from keras.src import quantizers
 from keras.src import random
 from keras.src import testing
 from keras.src.quantizers import strategy_registry
+from keras.src.quantizers.quantization_test_utils import host_data_ops
 from keras.src.quantizers.quantizers import compute_quantization_parameters
 from keras.src.quantizers.quantizers import dequantize_with_sz_map
 from keras.src.quantizers.quantizers import dequantize_with_zero_point
@@ -1136,3 +1140,73 @@ class TernarizeTest(testing.TestCase):
         self.assertAllClose(scale, beta, rtol=1e-5)
         expected = np.sign(exact) * (np.abs(exact) > 0.5 * beta)
         self.assertAllClose(np.asarray(codes, "float32"), expected)
+
+
+@pytest.mark.skipif(
+    backend.backend() != "torch", reason="Records the torch dispatch."
+)
+class HostDataTest(testing.TestCase):
+    """The helpers that quantized layers run on each call use no host data.
+
+    `host_data_ops` finds each op that makes a tensor from host data, on
+    every torch device, and each op that reads or returns a CPU tensor, on
+    a GPU or MPS device. Torch copies host data to the device on each
+    call, and a CUDA graph capture refuses the copy.
+    """
+
+    @parameterized.named_parameters(
+        ("int4_int8", 4, "int8"),
+        ("int4_uint8", 4, "uint8"),
+        ("int2_int8", 2, "int8"),
+        ("int2_uint8", 2, "uint8"),
+    )
+    def test_unpack_uses_no_host_data(self, bits, dtype):
+        packed = ops.convert_to_tensor(
+            np.arange(256, dtype="uint8").astype(dtype).reshape(16, 16)
+        )
+        unpack = quantizers.unpack_int4 if bits == 4 else quantizers.unpack_int2
+        # An odd length also trims the padding.
+        orig_len = 16 * (8 // bits) - 1
+        found = host_data_ops(
+            lambda: unpack(packed, orig_len, axis=0, dtype=dtype)
+        )
+        self.assertEqual(found, [])
+
+    def test_unpack_ternary_uses_no_host_data(self):
+        packed = ops.convert_to_tensor(
+            np.arange(243, dtype="uint8").reshape(27, 9)
+        )
+        found = host_data_ops(
+            lambda: quantizers.unpack_ternary(packed, 27 * 5 - 2, axis=0)
+        )
+        self.assertEqual(found, [])
+
+    @parameterized.named_parameters(
+        ("float32", "float32"), ("bfloat16", "bfloat16"), ("float16", "float16")
+    )
+    def test_activation_quantizer_uses_no_host_data(self, dtype):
+        # The int8 layers quantize their inputs with this quantizer.
+        values = ops.convert_to_tensor(
+            np.random.RandomState(0).randn(4, 32), dtype
+        )
+        found = host_data_ops(
+            lambda: quantizers.AbsMaxQuantizer()(values, axis=-1)
+        )
+        self.assertEqual(found, [])
+
+    def test_float8_training_step_uses_no_host_data(self):
+        # The forward and the backward pass update the scales and the amax
+        # histories.
+        if ops.convert_to_tensor(0).device.type == "mps":
+            self.skipTest("MPS has no float8 dtypes.")
+        layer = layers.Dense(8)
+        layer.build((None, 16))
+        layer.quantize("float8")
+        x = ops.convert_to_tensor(
+            np.random.RandomState(0).randn(4, 16), "float32"
+        )
+
+        def step():
+            ops.sum(layer(x, training=True)).backward()
+
+        self.assertEqual(host_data_ops(step), [])

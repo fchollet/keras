@@ -13,6 +13,7 @@ from keras.src import ops
 from keras.src.api_export import keras_export
 from keras.src.backend.common import standardize_dtype
 from keras.src.backend.common.backend_utils import canonicalize_axis
+from keras.src.quantizers.utils import device_constant
 
 
 def _pack_along_axis(arr_np, axis, values_per_byte, encode):
@@ -111,17 +112,18 @@ def _bitfield_encode(bits, np_dtype):
 
 def _bitfield_decode(bits, dtype):
     """Inverse of `_bitfield_encode`; sign-extends when `dtype` is int8."""
-    half = 1 << (bits - 1)
 
     def decode(x):
-        mask = ops.array((1 << bits) - 1, dtype=x.dtype)
+        # Tensors, not operators with Python numbers: `&` and `^` are
+        # logical on a `KerasTensor`.
+        mask = device_constant((1 << bits) - 1, x.dtype)
+        half = device_constant(1 << (bits - 1), x.dtype)
         fields = []
         for i in range(8 // bits):
             field = ops.bitwise_and(ops.right_shift(x, i * bits), mask)
             if dtype == "int8":
                 # Branchless sign extension: (x ^ half) - half.
-                h = ops.cast(half, standardize_dtype(field.dtype))
-                field = ops.subtract(ops.bitwise_xor(field, h), h)
+                field = ops.subtract(ops.bitwise_xor(field, half), half)
             fields.append(ops.cast(field, dtype))
         return fields
 
@@ -144,12 +146,10 @@ def _ternary_encode(fields):
 def _ternary_decode(x):
     codes = ops.cast(x, "int32")
     codes = ops.where(codes < 0, codes + 256, codes)
+    # With operators, the Python numbers stay scalars on torch (see
+    # `device_constant`).
     return [
-        ops.cast(
-            ops.subtract(ops.mod(ops.floor_divide(codes, place), 3), 1),
-            "int8",
-        )
-        for place in _TRIT_PLACES
+        ops.cast((codes // place) % 3 - 1, "int8") for place in _TRIT_PLACES
     ]
 
 

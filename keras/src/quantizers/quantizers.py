@@ -6,8 +6,10 @@ import numpy as np
 from keras.src import backend
 from keras.src import ops
 from keras.src.api_export import keras_export
+from keras.src.backend.common import dtypes
 from keras.src.backend.common import standardize_dtype
 from keras.src.backend.common.backend_utils import standardize_axis_for_numpy
+from keras.src.quantizers.utils import device_constant
 
 
 @keras_export(["keras.Quantizer", "keras.quantizers.Quantizer"])
@@ -103,13 +105,21 @@ def abs_max_quantize(
         )
 
     inputs = ops.convert_to_tensor(inputs)
+    # Each constant has the dtype that its op gives a Python number.
+    amax = ops.max(ops.abs(inputs), axis=axis, keepdims=True)
+    denominator = ops.add(
+        amax, device_constant(epsilon, dtypes.result_type(amax.dtype, float))
+    )
     scale = ops.divide(
-        value_range[1],
-        ops.add(ops.max(ops.abs(inputs), axis=axis, keepdims=True), epsilon),
+        device_constant(value_range[1], denominator.dtype), denominator
     )
     scale = ops.cast(scale, standardize_dtype(inputs.dtype))
-    outputs = ops.multiply(inputs, scale)
-    outputs = ops.clip(ops.round(outputs), value_range[0], value_range[1])
+    outputs = ops.round(ops.multiply(inputs, scale))
+    outputs = ops.clip(
+        outputs,
+        device_constant(value_range[0], outputs.dtype),
+        device_constant(value_range[1], outputs.dtype),
+    )
     outputs = ops.cast(outputs, dtype)
     return outputs, scale
 
