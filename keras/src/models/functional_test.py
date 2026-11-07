@@ -135,6 +135,67 @@ class FunctionalTest(testing.TestCase):
         y = model(x)
         self.assertEqual(y.shape, (2, 3, 4))
 
+    def test_nested_model_propagates_symbolic_output_mask(self):
+        class MaskCombiningLayer(layers.Layer):
+            def __init__(self):
+                super().__init__()
+                self.supports_masking = True
+
+            def call(self, inputs, mask=None):
+                x, y = inputs
+                return x + y
+
+            def compute_mask(self, inputs, previous_mask):
+                x_mask, y_mask = previous_mask
+                return ops.logical_and(x_mask, y_mask)
+
+        embedding = layers.Embedding(3, 5, mask_zero=True)
+        inputs = Input((3,))
+        direct_output = embedding(inputs)
+        embedding_model = Model(inputs, direct_output)
+
+        nested_output = embedding_model(inputs)
+        direct_mask = backend.get_keras_mask(direct_output)
+        nested_mask = backend.get_keras_mask(nested_output)
+        self.assertIsNotNone(nested_mask)
+
+        combined = MaskCombiningLayer()((direct_output, nested_output))
+        combined_mask = backend.get_keras_mask(combined)
+        self.assertIsNotNone(combined_mask)
+
+        mask_model = Model(inputs, [direct_mask, nested_mask, combined_mask])
+        mask_values = mask_model(np.array([[0, 1, 2], [1, 0, 2]]))
+        self.assertAllClose(mask_values[0], mask_values[1])
+        self.assertAllClose(
+            mask_values[2],
+            np.array([[False, True, True], [True, False, True]]),
+        )
+
+    def test_compute_output_spec_does_not_create_duplicate_nodes(self):
+        inputs = Input((3,), dtype="int32")
+        embedding = layers.Embedding(3, 5, mask_zero=True)
+        outputs = embedding(inputs)
+        model = Model(inputs, outputs)
+
+        initial_node_count = len(embedding._inbound_nodes)
+        _ = model.compute_output_spec(Input((3,), dtype="int32"))
+
+        self.assertEqual(len(embedding._inbound_nodes), initial_node_count)
+
+    def test_compute_output_spec_propagates_caller_mask(self):
+        inputs = Input((3, 5))
+        outputs = layers.ReLU()(inputs)
+        model = Model(inputs, outputs)
+        self.assertIsNone(backend.get_keras_mask(outputs))
+
+        input_mask = KerasTensor((None, 3), dtype="bool")
+        test_input = Input((3, 5))
+        backend.set_keras_mask(test_input, input_mask)
+
+        output_spec = model.compute_output_spec(test_input)
+
+        self.assertIs(backend.get_keras_mask(output_spec), input_mask)
+
     def test_named_input_dict_io(self):
         # Single input
         input_a = Input(shape=(3,), batch_size=2, name="a")

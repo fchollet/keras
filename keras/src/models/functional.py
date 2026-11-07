@@ -225,7 +225,56 @@ class Functional(Function, Model):
 
     def compute_output_spec(self, inputs, training=None, mask=None):
         # From Function
-        return super().compute_output_spec(inputs)
+        if mask is not None:
+            has_input_masks = any(
+                input_mask is not None for input_mask in tree.flatten(mask)
+            )
+        else:
+            has_input_masks = any(
+                x is not None and backend.get_keras_mask(x) is not None
+                for x in tree.flatten(inputs)
+            )
+        has_output_masks = any(
+            x is not None and backend.get_keras_mask(x) is not None
+            for x in tree.flatten(self._outputs_struct)
+        )
+        if not has_input_masks and not has_output_masks:
+            return super().compute_output_spec(inputs)
+
+        flat_inputs = self._standardize_inputs(inputs)
+        if mask is not None:
+            for x, input_mask in zip(flat_inputs, tree.flatten(mask)):
+                if x is not None and input_mask is not None:
+                    backend.set_keras_mask(x, input_mask)
+
+        def mask_propagation_call_fn(op, *args, **kwargs):
+            outputs = op.compute_output_spec(*args, **kwargs)
+            if "mask" in kwargs:
+                previous_mask = kwargs["mask"]
+            elif args:
+                previous_mask = tree.map_structure(
+                    backend.get_keras_mask, args[0]
+                )
+            else:
+                previous_mask = None
+
+            if getattr(op, "supports_masking", False):
+                output_masks = op.compute_mask(
+                    args[0] if args else None, previous_mask
+                )
+                if output_masks is not None:
+                    flat_outputs = tree.flatten(outputs)
+                    flat_output_masks = tree.flatten(output_masks)
+                    for output, output_mask in zip(
+                        flat_outputs, flat_output_masks
+                    ):
+                        if output is not None and output_mask is not None:
+                            backend.set_keras_mask(output, output_mask)
+            return outputs
+
+        return self._run_through_graph(
+            flat_inputs, call_fn=mask_propagation_call_fn
+        )
 
     def compute_output_shape(self, input_shape):
         # From Function
@@ -321,13 +370,15 @@ class Functional(Function, Model):
                 # behavior and accept None.
                 converted.append(x)
             else:
-                converted.append(
-                    ops.convert_to_tensor(
-                        x,
-                        dtype=input_tensor.dtype,
-                        sparse=input_tensor.sparse,
-                    )
+                mask = backend.get_keras_mask(x)
+                converted_input = ops.convert_to_tensor(
+                    x,
+                    dtype=input_tensor.dtype,
+                    sparse=input_tensor.sparse,
                 )
+                if mask is not None:
+                    backend.set_keras_mask(converted_input, mask)
+                converted.append(converted_input)
         return converted
 
     def _adjust_input_rank(self, flat_inputs):
