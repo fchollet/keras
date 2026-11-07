@@ -991,10 +991,7 @@ def moments(x, axes, keepdims=False, synchronized=False):
         x = cast(x, "float32")
 
     mean = np.mean(x, axes, keepdims=True)
-
-    # The variance is computed using $Var = E[|x|^2] - |E[x]|^2$, It is faster
-    # but less numerically stable.
-    variance = np.mean(np.square(x), axis=axes, keepdims=True) - np.square(mean)
+    variance = np.var(x, axis=axes, keepdims=True)
 
     if not keepdims:
         mean = np.squeeze(mean, axes)
