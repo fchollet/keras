@@ -595,13 +595,14 @@ class R2Score(reduction_metrics.Metric):
         return {**base_config, **config}
 
 
+@keras_export("keras.metrics.cosine_similarity")
 def cosine_similarity(y_true, y_pred, axis=-1):
     """Computes the cosine similarity between labels and predictions.
 
     Formula:
 
     ```python
-    loss = sum(l2_norm(y_true) * l2_norm(y_pred))
+    similarity = sum(l2_norm(y_true) * l2_norm(y_pred))
     ```
 
     Args:
@@ -616,7 +617,7 @@ def cosine_similarity(y_true, y_pred, axis=-1):
 
     >>> y_true = [[0., 1.], [1., 1.], [1., 1.]]
     >>> y_pred = [[1., 0.], [1., 1.], [-1., -1.]]
-    >>> loss = keras.losses.cosine_similarity(y_true, y_pred, axis=-1)
+    >>> sim = keras.metrics.cosine_similarity(y_true, y_pred, axis=-1)
     [0., 0.99999994, -0.99999994]
     """
     y_pred = ops.convert_to_tensor(y_pred)

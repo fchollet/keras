@@ -112,6 +112,15 @@ class CosineSimilarityTest(testing.TestCase):
         expected_loss = np.mean(self.expected_loss)
         self.assertAlmostEqual(loss, expected_loss, 3)
 
+    def test_functional(self):
+        y_true = np.array([[0.0, 1.0], [1.0, 1.0], [1.0, 1.0]], dtype="float32")
+        y_pred = np.array(
+            [[1.0, 0.0], [1.0, 1.0], [-1.0, -1.0]], dtype="float32"
+        )
+        result = metrics.cosine_similarity(y_true, y_pred, axis=-1)
+        expected = np.array([0.0, 1.0, -1.0], dtype="float32")
+        self.assertAllClose(result, expected, atol=1e-5)
+
 
 class MeanAbsoluteErrorTest(testing.TestCase):
     def test_config(self):
