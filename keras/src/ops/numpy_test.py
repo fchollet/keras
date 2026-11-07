@@ -7550,6 +7550,7 @@ class NumpyOneInputOpsCorrectnessTest(testing.TestCase):
     def test_std(self):
         x = np.array([[1, 2, 3], [3, 2, 1]])
         self.assertAllClose(knp.std(x), np.std(x))
+        self.assertAllClose(knp.std(x, axis=()), np.std(x, axis=()))
         self.assertAllClose(knp.std(x, axis=1), np.std(x, axis=1))
         self.assertAllClose(
             knp.std(x, axis=1, keepdims=True),
@@ -7562,6 +7563,7 @@ class NumpyOneInputOpsCorrectnessTest(testing.TestCase):
         )
 
         self.assertAllClose(knp.Std()(x), np.std(x))
+        self.assertAllClose(knp.Std(axis=())(x), np.std(x, axis=()))
         self.assertAllClose(knp.Std(axis=1)(x), np.std(x, axis=1))
         self.assertAllClose(
             knp.Std(axis=1, keepdims=True)(x),

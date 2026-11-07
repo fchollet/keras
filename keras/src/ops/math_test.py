@@ -879,6 +879,14 @@ class MathOpsCorrectnessTest(testing.TestCase):
         expected = np.log(np.sum(np.exp(x), axis=1))
         self.assertAllClose(outputs, expected)
 
+        # Empty axis is a no-op (numpy / scipy.special.logsumexp).
+        # Regression for #23989 (Torch previously reduced over all axes).
+        outputs = kmath.logsumexp(x, axis=())
+        self.assertAllClose(outputs, x)
+        outputs = kmath.logsumexp(x, axis=(), keepdims=True)
+        self.assertAllClose(outputs, x)
+        self.assertEqual(tuple(outputs.shape), x.shape)
+
     def test_extract_sequences(self):
         # Test 1D case.
         x = np.random.random((10,))

@@ -2127,6 +2127,9 @@ def std(x, axis=None, keepdims=False):
     ori_dtype = standardize_dtype(x.dtype)
     if "int" in ori_dtype or ori_dtype == "bool":
         x = cast(x, "float32")
+    if axis == () or axis == []:
+        # Torch handles the empty axis case differently from numpy.
+        return zeros_like(x, dtypes.result_type(x.dtype, float))
     # Remove Bessel correction to align with numpy
     return torch.std(x, dim=axis, keepdim=keepdims, unbiased=False)
 
