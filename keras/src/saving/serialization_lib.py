@@ -93,6 +93,94 @@ class SafeModeScope:
         )
 
 
+class DeferredBuildScope:
+    """Recording of layers to build/compile with order and nesting information.
+
+    During deserialization, nested layers are instantiated and reconstructed
+    from innermost to outermost. However, when a model is constructed normally,
+    layers are built from outermost to innermost within a stack of name scopes,
+    which determines the `path` of each layer and its variables.
+
+    `DeferredBuildScope` defers `build_from_config` and `compile_from_config`
+    calls during `from_config` so that once the outermost scope exits, layers
+    can be recursively built and compiled within their parent layers' name
+    scopes, recreating the proper name scope hierarchy.
+
+    Attributes:
+        parent: Optional `DeferredBuildScope`. The enclosing parent scope, or
+            `None` if this is the outermost (root) scope.
+        children: List of `DeferredBuildScope` instances representing nested
+            scopes created for child layers during `from_config`.
+        instance: The deserialized `Layer` or `Model` instance whose build and
+            compilation are deferred by this scope.
+        build_config: Optional dict. The configuration passed to
+            `instance.build_from_config()`, or `None` if there is no build
+            config.
+        compile_config: Optional dict. The configuration passed to
+            `instance.compile_from_config()`, or `None` if there is no compile
+            config.
+    """
+
+    def __init__(self):
+        self.parent = None
+        self.children = []
+        self.instance = None
+        self.build_config = None
+        self.compile_config = None
+
+    @staticmethod
+    def get_state():
+        return global_state.get_global_attribute(
+            "serialization_deferred_build_state"
+        )
+
+    @staticmethod
+    def set_state(state):
+        global_state.set_global_attribute(
+            "serialization_deferred_build_state", state
+        )
+
+    @staticmethod
+    def recursive_build(scope):
+        # Build children first.
+        if scope.children:
+            if scope.instance is not None:
+                with scope.instance._open_name_scope():
+                    for child in scope.children:
+                        DeferredBuildScope.recursive_build(child)
+            else:
+                for child in scope.children:
+                    DeferredBuildScope.recursive_build(child)
+
+        # Then the parent.
+        if scope.instance is not None:
+            if scope.build_config and not scope.instance.built:
+                scope.instance.build_from_config(scope.build_config)
+                scope.instance.built = True
+            if scope.compile_config:
+                scope.instance.compile_from_config(scope.compile_config)
+                scope.instance.compiled = True
+
+    def defer_build(self, instance, build_config, compile_config):
+        self.instance = instance
+        self.build_config = build_config
+        self.compile_config = compile_config
+
+    def __enter__(self):
+        parent = self.get_state()
+        if parent is not None:
+            parent.children.append(self)
+            self.parent = parent
+        self.set_state(self)
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.set_state(self.parent)
+        if self.parent is None:
+            # This was the last scope in the stack, build everything now.
+            self.recursive_build(self)
+
+
 @keras_export("keras.config.enable_unsafe_deserialization")
 def enable_unsafe_deserialization():
     """Disables safe mode globally, allowing deserialization of lambdas."""
@@ -761,6 +849,9 @@ def deserialize_keras_object(
             from keras.src.layers.layer import Layer
             from keras.src.models.functional import Functional
 
+            build_config = config.get("build_config", None)
+            compile_config = config.get("compile_config", None)
+
             if (
                 inspect.isclass(cls)
                 and issubclass(cls, Layer)
@@ -769,7 +860,6 @@ def deserialize_keras_object(
                 # model is even created. So the name of the model is not part
                 # of the name stack when the path is captured.
                 and not issubclass(cls, Functional)
-                and inner_config.get("name")
             ):
                 # The `build` method wrapper is where the `path` of layers is
                 # captured, which is then used for variable paths.
@@ -779,14 +869,23 @@ def deserialize_keras_object(
                 # However, when reconstructing from config, layers and models
                 # are built from innermost to outermost. This is because the
                 # build config was captured and `build_from_config` is called
-                # right below.
-                # In order to recreate the correct name stack, we need a name
-                # scope wrapping `from_config`, which is where nested layers
-                # are constructed and built.
-                with backend.name_scope(inner_config.get("name")):
+                # right after the object is constructed.
+                # In order to recreate the correct name stack with the correct
+                # instances to de-duplicate, we need to defer the building to
+                # after all the instances are created.
+                with DeferredBuildScope() as deferred_build_scope:
                     instance = cls.from_config(inner_config)
+                    deferred_build_scope.defer_build(
+                        instance, build_config, compile_config
+                    )
             else:
                 instance = cls.from_config(inner_config)
+                if build_config and not instance.built:
+                    instance.build_from_config(build_config)
+                    instance.built = True
+                if compile_config:
+                    instance.compile_from_config(compile_config)
+                    instance.compiled = True
         except TypeError as e:
             raise TypeError(
                 f"{cls} could not be deserialized properly. Please"
@@ -796,14 +895,6 @@ def deserialize_keras_object(
                 " model's `from_config()` method."
                 f"\n\nconfig={config}.\n\nException encountered: {e}"
             )
-        build_config = config.get("build_config", None)
-        if build_config and not instance.built:
-            instance.build_from_config(build_config)
-            instance.built = True
-        compile_config = config.get("compile_config", None)
-        if compile_config:
-            instance.compile_from_config(compile_config)
-            instance.compiled = True
 
     if "shared_object_id" in config:
         record_object_after_deserialization(

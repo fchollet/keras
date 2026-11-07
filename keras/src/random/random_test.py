@@ -84,6 +84,16 @@ class RandomCorrectnessTest(testing.TestCase):
         if keras.backend.backend() != "torch":
             self.assertEqual(standardize_dtype(res.dtype), dtype)
 
+    def test_randint_wide_range(self):
+        # Every integer in a range wider than 2**24 can be drawn, not only
+        # those on a coarse float32 grid.
+        res = ops.convert_to_numpy(random.randint((1000,), 0, 2**30, seed=0))
+        self.assertGreaterEqual(res.min(), 0)
+        self.assertLess(res.max(), 2**30)
+        # Uniform draws cover about 250 of the 256 residues, a coarse float32
+        # grid covers far fewer.
+        self.assertGreater(len(np.unique(res % 256)), 128)
+
     @parameterized.parameters(
         {"seed": 10, "shape": (5,), "mean": 0, "stddev": 1},
         {"seed": 10, "shape": (2, 3), "mean": 0, "stddev": 1},
@@ -113,6 +123,11 @@ class RandomCorrectnessTest(testing.TestCase):
         self.assertGreater(ops.cast(ops.sum(x_res == 0), "int32"), 2)
         x_res = random.dropout(x, rate=1.0, seed=0)
         self.assertAllClose(x_res, ops.zeros((10, 10)))
+
+        x = np.ones((10, 10), dtype="float32")
+        self.assertEqual(random.dropout(x, rate=0.5).shape, (10, 10))
+        self.assertEqual(random.dropout(x, rate=0.5, seed=0).shape, (10, 10))
+        self.assertAllClose(random.dropout(x, rate=1.0), np.zeros((10, 10)))
 
     def test_dropout_noise_shape(self):
         inputs = ops.ones((2, 3, 5, 7))

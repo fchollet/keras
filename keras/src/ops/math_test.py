@@ -755,6 +755,12 @@ class MathOpsCorrectnessTest(testing.TestCase):
         self.assertAllClose(outputs[0], expected_values)
         self.assertAllClose(outputs[1], expected_indices)
 
+        # `nan` ranks highest.
+        x = np.array([1.0, np.nan, 3.0, np.inf, 2.0], dtype=np.float32)
+        values, indices = kmath.top_k(x, k=4)
+        self.assertAllClose(values, [np.nan, np.inf, 3, 2])
+        self.assertAllClose(indices, [1, 3, 2, 4])
+
     def check_stability(self, values, indices):
         """Helper function to check stability of top_k."""
         values_np = backend.ops.convert_to_numpy(values)

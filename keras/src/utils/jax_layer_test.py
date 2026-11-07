@@ -766,3 +766,42 @@ class TestJaxLayer(testing.TestCase):
         layer2 = JaxLayer(jax_apply, jax_init, **self.init_kwargs)
         layer2.build(shape)
         self.assertAllClose(layer1.params[0], layer2.params[0])
+
+    def test_with_keras_variable_leaves(self):
+        def jax_call_fn(params, state, inputs):
+            return jnp.dot(inputs, params["w"]) + state["b"], state
+
+        w = backend.Variable(initializer="ones", shape=(3, 2), trainable=True)
+        b = backend.Variable(initializer="zeros", shape=(2,), trainable=False)
+        layer = JaxLayer(
+            jax_call_fn, params={"w": w}, state={"b": b}, **self.init_kwargs
+        )
+
+        # The variables are used as-is, not copied.
+        self.assertIs(layer.params["w"], w)
+        self.assertIs(layer.state["b"], b)
+        self.assertLen(layer.trainable_weights, 1)
+        self.assertIs(layer.trainable_weights[0], w)
+        self.assertLen(layer.non_trainable_weights, 1)
+        self.assertIs(layer.non_trainable_weights[0], b)
+
+        # The layer reads the current value of the variables.
+        w.assign(np.full((3, 2), 2.0, dtype="float32"))
+        out = layer(np.ones((1, 3), dtype="float32"))
+        self.assertAllClose(out, np.full((1, 2), 6.0, dtype="float32"))
+
+    def test_with_keras_variable_leaves_uninitialized(self):
+        def jax_call_fn(params, inputs):
+            return jnp.dot(inputs, params["w"])
+
+        with backend.StatelessScope(initialize_variables=False):
+            w = backend.Variable(initializer="ones", shape=(3, 2))
+            layer = JaxLayer(jax_call_fn, params={"w": w}, **self.init_kwargs)
+
+        # Creating the layer does not initialize or copy the variable.
+        self.assertIsNone(w._value)
+        self.assertIs(layer.params["w"], w)
+
+        w._deferred_initialize()
+        out = layer(np.ones((1, 3), dtype="float32"))
+        self.assertAllClose(out, np.full((1, 2), 3.0, dtype="float32"))
