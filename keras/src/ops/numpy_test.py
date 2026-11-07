@@ -3470,6 +3470,15 @@ class NumpyTwoInputOpsCorrectnessTest(testing.TestCase):
         self.assertAllClose(knp.heaviside(x, y), np.heaviside(x, y))
         self.assertAllClose(knp.Heaviside()(x, y), np.heaviside(x, y))
 
+        x = np.array([np.nan, -1.0, 0.0, 2.0], dtype=np.float32)
+        y = np.array(0.5, dtype=np.float32)
+        self.assertAllClose(knp.heaviside(x, y), np.heaviside(x, y))
+        self.assertAllClose(knp.Heaviside()(x, y), np.heaviside(x, y))
+
+        y = np.array(np.nan, dtype=np.float32)
+        self.assertAllClose(knp.heaviside(x, y), np.heaviside(x, y))
+        self.assertAllClose(knp.Heaviside()(x, y), np.heaviside(x, y))
+
     def test_hypot(self):
         x = np.array([[1, 2, 3], [3, 2, 1]])
         y = np.array([[4, 5, 6], [6, 5, 4]])

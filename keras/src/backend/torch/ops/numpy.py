@@ -638,7 +638,8 @@ def heaviside(x1, x2):
     x1 = cast(x1, dtype)
     x2 = cast(x2, dtype)
 
-    return torch.heaviside(x1, x2)
+    # `torch.heaviside` maps NaN to 0, whereas `np.heaviside` returns NaN.
+    return torch.where(torch.isnan(x1), x1, torch.heaviside(x1, x2))
 
 
 def kaiser(x, beta):
