@@ -323,6 +323,9 @@ def load_weights(model, filepath, skip_mismatch=False, **kwargs):
                 "You can install it via `pip install h5py`"
             )
         with h5py.File(filepath, "r") as f:
+            # Reject a cumulative shape bomb once, right after opening, so the
+            # legacy weight loaders below don't each re-walk the whole file.
+            saving_lib.reject_h5_shape_bomb(f)
             if "layer_names" not in f.attrs and "model_weights" in f:
                 f = saving_lib.safe_get_h5_group(f, "model_weights")
             if by_name:

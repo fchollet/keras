@@ -2186,6 +2186,123 @@ class SafeGetH5DatasetTest(testing.TestCase):
         with self.assertRaises(ValueError):
             reloaded.load_weights(good_path)
 
+    def _cumulative_bomb_file(self):
+        """Several datasets, each just under the 4 GiB per-dataset floor and
+        storing ~nothing, that jointly declare far more than is stored."""
+        path = os.path.join(self.get_temp_dir(), "cumulative_bomb.h5")
+        elems = (3 << 30) // 4  # 3 GiB of float32 each, below the 4 GiB floor
+        with h5py.File(path, "w") as f:
+            g = f.create_group("layer")
+            for i in range(3):  # 9 GiB declared total
+                g.create_dataset(
+                    f"w{i}",
+                    shape=(elems,),
+                    dtype="float32",
+                    chunks=(1 << 20,),
+                    compression="gzip",
+                    fillvalue=0.0,
+                )
+        return path
+
+    def test_rejects_cumulative_shape_bomb_under_floor(self):
+        path = self._cumulative_bomb_file()
+        self.assertLess(os.path.getsize(path), 1 << 20)  # tiny file on disk
+        with h5py.File(path, "r") as f:
+            # Each dataset is below the per-dataset floor, so the per-dataset
+            # guard passes; the cumulative guard must still reject the file.
+            for name in ("w0", "w1", "w2"):
+                saving_lib.safe_get_h5_dataset(f["layer"], name)
+            with self.assertRaisesRegex(ValueError, "shape bomb"):
+                saving_lib.reject_h5_shape_bomb(f)
+
+    def test_does_not_reject_genuine_weights(self):
+        model = keras.Sequential(
+            [keras.Input((16,)), keras.layers.Dense(64), keras.layers.Dense(8)]
+        )
+        path = os.path.join(self.get_temp_dir(), "good.weights.h5")
+        model.save_weights(path)
+        with h5py.File(path, "r") as f:
+            saving_lib.reject_h5_shape_bomb(f)  # must not raise
+
+    def test_rejects_single_sub_floor_shape_bomb(self):
+        # A single dataset declaring just under the 4 GiB per-dataset floor with
+        # ~0 stored still declares far more than the file holds, so the
+        # cumulative guard must reject it.
+        path = os.path.join(self.get_temp_dir(), "single_bomb.h5")
+        with h5py.File(path, "w") as f:
+            f.create_dataset(
+                "d",
+                shape=((3 << 30) // 4,),  # 3 GiB float32, below the 4 GiB floor
+                dtype="float32",
+                chunks=(1 << 20,),
+                compression="gzip",
+                fillvalue=0.0,
+            )
+        self.assertLess(os.path.getsize(path), 1 << 20)
+        with h5py.File(path, "r") as f:
+            with self.assertRaisesRegex(ValueError, "shape bomb"):
+                saving_lib.reject_h5_shape_bomb(f)
+
+    def test_ignores_null_dataspace_dataset(self):
+        # A null-dataspace dataset has `shape is None`; the guard must skip it
+        # instead of crashing in `math.prod(None)`.
+        path = os.path.join(self.get_temp_dir(), "null.h5")
+        with h5py.File(path, "w") as f:
+            f.create_dataset("empty", data=h5py.Empty("float32"))
+            f.create_dataset("real", shape=(8,), dtype="float32")
+        with h5py.File(path, "r") as f:
+            self.assertIsNone(f["empty"].shape)
+            saving_lib.reject_h5_shape_bomb(f)  # must not raise
+
+    def test_rejects_virtual_dataset(self):
+        # A virtual dataset can declare a huge shape backed by data outside the
+        # file, so the guard must reject it instead of counting its bytes.
+        path = os.path.join(self.get_temp_dir(), "virtual.h5")
+        layout = h5py.VirtualLayout(shape=(1 << 30,), dtype="float32")
+        source_path = os.path.join(self.get_temp_dir(), "source.h5")
+        with h5py.File(source_path, "w") as src:
+            src.create_dataset("data", data=np.zeros((8,), dtype="float32"))
+        layout[:8] = h5py.VirtualSource(source_path, "data", shape=(8,))
+        with h5py.File(path, "w") as f:
+            f.create_virtual_dataset("vds", layout)
+        with h5py.File(path, "r") as f:
+            self.assertTrue(f["vds"].is_virtual)
+            with self.assertRaisesRegex(ValueError, "virtual Dataset"):
+                saving_lib.reject_h5_shape_bomb(f)
+
+    def test_load_sharded_weights_rejects_shape_bomb(self):
+        # Sharded weights open each shard via `_get_h5_file` (never
+        # `H5IOStore.__init__`), so a bomb planted in a shard must still be
+        # rejected when that shard is opened.
+        model = keras.Sequential(
+            [keras.Input((256,))] + [keras.layers.Dense(256) for _ in range(8)]
+        )
+        temp_dir = self.get_temp_dir()
+        path = os.path.join(temp_dir, "sharded.weights.json")
+        saving_lib.save_weights_only(model, path, max_shard_size=0.0005)
+        shards = [
+            name
+            for name in os.listdir(temp_dir)
+            if name.endswith(".weights.h5")
+        ]
+        self.assertGreater(len(shards), 1)
+        # The first shard is opened by `ShardedH5IOStore.__init__`.
+        first_shard = os.path.join(temp_dir, "sharded_00000.weights.h5")
+        with h5py.File(first_shard, "a") as f:
+            f.create_group("bomb").create_dataset(
+                "w",
+                shape=((3 << 30) // 4,),
+                dtype="float32",
+                chunks=(1 << 20,),
+                compression="gzip",
+                fillvalue=0.0,
+            )
+        reloaded = keras.Sequential(
+            [keras.Input((256,))] + [keras.layers.Dense(256) for _ in range(8)]
+        )
+        with self.assertRaisesRegex(ValueError, "shape bomb"):
+            saving_lib.load_weights_only(reloaded, path)
+
 
 class SavingDiskIOStoreTest(testing.TestCase):
     def test_disk_io_store_rejects_path_traversal(self):

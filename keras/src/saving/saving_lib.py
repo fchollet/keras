@@ -1208,6 +1208,12 @@ def safe_get_h5_group(parent, name):
 # this; shape/decompression bombs, which store next to nothing, do not.
 _H5_DATASET_BOMB_FLOOR_BYTES = 1 << 32  # 4 GiB
 _H5_DATASET_MAX_EXPANSION = 1000
+# Floor for the *cumulative* (whole-file) guard below. Genuine HDF5 weight
+# files store their arrays uncompressed, so their total declared size tracks
+# the on-disk size (ratio ~1); only a bomb declares far more than is stored.
+# A much lower floor than the per-dataset one lets the cumulative guard also
+# catch a single sub-4 GiB dataset that the per-dataset floor would miss.
+_H5_CUMULATIVE_BOMB_FLOOR_BYTES = 1 << 26  # 64 MiB
 
 
 def safe_get_h5_dataset(group, name):
@@ -1259,6 +1265,59 @@ def safe_get_h5_dataset(group, name):
     return dataset
 
 
+def reject_h5_shape_bomb(h5_file):
+    """Guard against an HDF5 file that is a cumulative shape bomb.
+
+    `safe_get_h5_dataset` bounds a *single* dataset, but its per-dataset floor
+    can be evaded by many datasets that each declare just under the floor while
+    storing almost nothing, and that are then read into memory together (e.g.
+    `load_subset_weights_from_hdf5_group` materializes every weight of a layer
+    at once). This bounds the *cumulative* in-memory size of all datasets in
+    the file against the bytes actually stored on disk, using the same
+    expansion ratio. Because genuine weight files are uncompressed (declared
+    size ~= file size), this also catches a single dataset that declares just
+    under the per-dataset 4 GiB floor (CWE-789 / CWE-409).
+    """
+    try:
+        file_size = h5_file.id.get_filesize()
+    except Exception:
+        # If we cannot determine the on-disk size, skip the cumulative check
+        # rather than break loading; the per-dataset guard still applies.
+        return
+    if file_size <= 0:
+        return
+    total_declared = 0
+
+    def _accumulate(_name, obj):
+        nonlocal total_declared
+        if not isinstance(obj, h5py.Dataset):
+            return
+        if obj.is_virtual:
+            # A virtual dataset maps to data outside this file, so its declared
+            # size is not backed by the on-disk bytes we measure here. Reject it
+            # outright, exactly as `safe_get_h5_dataset` does on access, instead
+            # of letting it slip through the cumulative accounting.
+            raise ValueError("Not allowed: H5 file with virtual Dataset")
+        # A null-dataspace dataset has `shape is None`; skip it (`math.prod`
+        # would raise on `None`).
+        if obj.shape is not None:
+            total_declared += math.prod(obj.shape) * obj.dtype.itemsize
+
+    # `visititems` only walks hard-linked datasets; external/soft links are
+    # rejected separately by `safe_get_h5_dataset` when they are accessed.
+    h5_file.visititems(_accumulate)
+    if (
+        total_declared > _H5_CUMULATIVE_BOMB_FLOOR_BYTES
+        and total_declared > _H5_DATASET_MAX_EXPANSION * file_size
+    ):
+        raise ValueError(
+            "Not allowed: the HDF5 file declares "
+            f"{readable_memory_size(total_declared)} of array data but only "
+            f"{readable_memory_size(file_size)} are stored on disk; "
+            "refusing to load a potential decompression/shape bomb."
+        )
+
+
 class H5IOStore:
     """Numerical variable store backed by HDF5.
 
@@ -1296,7 +1355,9 @@ class H5IOStore:
         self.archive = archive
         self.io_file = None
 
-        # Init H5 file.
+        # Init H5 file. `_get_h5_file` applies `reject_h5_shape_bomb` on every
+        # read-mode open, so it also covers `ShardedH5IOStore`'s lazily opened
+        # shards (which never call this `__init__`).
         self.h5_file = self._get_h5_file(self.path_or_io)
 
         # Init H5 entry group.
@@ -1321,9 +1382,14 @@ class H5IOStore:
                 self.io_file = io.BytesIO()
             else:
                 self.io_file = self.archive.open(str(path_or_io), "r")
-            return h5py.File(self.io_file, mode=mode)
+            h5_file = h5py.File(self.io_file, mode=mode)
         else:
-            return h5py.File(path_or_io, mode=mode)
+            h5_file = h5py.File(path_or_io, mode=mode)
+        if mode == "r":
+            # Guard every read-mode open (covers `H5IOStore`, sharded shards
+            # opened lazily by `ShardedH5IOStore`, and shard switching).
+            reject_h5_shape_bomb(h5_file)
+        return h5_file
 
     def make(self, path, metadata=None):
         """Make a new H5 entry group.

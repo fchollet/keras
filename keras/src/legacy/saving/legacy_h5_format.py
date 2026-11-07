@@ -12,6 +12,7 @@ from keras.src.legacy.saving import saving_options
 from keras.src.legacy.saving import saving_utils
 from keras.src.saving import object_registration
 from keras.src.saving import serialization_lib
+from keras.src.saving.saving_lib import reject_h5_shape_bomb
 from keras.src.saving.saving_lib import safe_get_h5_dataset
 from keras.src.saving.saving_lib import safe_get_h5_group
 from keras.src.utils import io_utils
@@ -120,6 +121,10 @@ def load_model_from_hdf5(
         f = h5py.File(filepath, mode="r")
     else:
         f = filepath
+
+    # Reject a cumulative shape bomb once, at the single point where the file is
+    # opened, so the weight loaders below don't each re-walk the whole file.
+    reject_h5_shape_bomb(f)
 
     model = None
     try:
