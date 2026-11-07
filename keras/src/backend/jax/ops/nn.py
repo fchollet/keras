@@ -1219,7 +1219,9 @@ def ctc_loss(target, output, target_length, output_length, mask_index=0):
         dtype=logalpha_phi_last.dtype,
     )
     per_seq_loss = -jnp.einsum("bn,bn->b", logalpha_phi_last, _one_hot)
-    return per_seq_loss
+    # Float32 log-space rounding can push a near-certain alignment slightly
+    # below zero; CTC loss is nonnegative.
+    return jnp.maximum(per_seq_loss, 0.0)
 
 
 def _ctc_greedy_decode(

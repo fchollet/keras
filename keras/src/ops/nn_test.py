@@ -2910,6 +2910,19 @@ class NNOpsCorrectnessTest(testing.TestCase):
             tpu_rtol=1e-2,
         )
 
+    def test_ctc_loss_is_nonnegative_for_confident_alignment(self):
+        # Near-certain valid alignments can round slightly negative in
+        # float32 log-space (same class of bug as google-deepmind/optax#1771).
+        labels = np.array([[1]], dtype="int32")
+        outputs = np.array([[[0.0, 17.0], [0.0, 17.0]]], dtype="float32")
+        label_length = np.array([1])
+        output_length = np.array([2])
+        result = knn.ctc_loss(
+            labels, outputs, label_length, output_length, mask_index=0
+        )
+        result = np.array(ops.convert_to_numpy(result)).reshape(-1)
+        self.assertGreaterEqual(float(result[0]), 0.0)
+
     def test_ctc_decode(self):
         inputs = np.array(
             [
