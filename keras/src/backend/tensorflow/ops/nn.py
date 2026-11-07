@@ -1446,6 +1446,9 @@ def categorical_crossentropy(target, output, from_logits=False, axis=-1):
     """
     target = tf.convert_to_tensor(target)
     output = tf.convert_to_tensor(output)
+    if not backend.is_float_dtype(output.dtype):
+        output = tf.cast(output, backend.floatx())
+    target = tf.cast(target, output.dtype)
 
     if len(target.shape) < 1:
         raise ValueError(
@@ -1516,6 +1519,8 @@ def sparse_categorical_crossentropy(target, output, from_logits=False, axis=-1):
     target = tf.convert_to_tensor(target)
     target = tf.cast(target, dtype="int64")
     output = tf.convert_to_tensor(output)
+    if not backend.is_float_dtype(output.dtype):
+        output = tf.cast(output, backend.floatx())
     if len(target.shape) == len(output.shape) and target.shape[-1] == 1:
         target = tf.squeeze(target, axis=-1)
 

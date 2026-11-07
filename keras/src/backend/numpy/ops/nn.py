@@ -900,6 +900,10 @@ def multi_hot(x, num_classes, axis=-1, dtype=None, sparse=False):
 def categorical_crossentropy(target, output, from_logits=False, axis=-1):
     target = np.array(target)
     output = np.array(output)
+    if not backend.is_float_dtype(output.dtype):
+        output = cast(output, backend.floatx())
+    target = cast(target, output.dtype)
+    dtype = output.dtype
 
     if target.shape != output.shape:
         raise ValueError(
@@ -920,12 +924,15 @@ def categorical_crossentropy(target, output, from_logits=False, axis=-1):
         output = output / np.sum(output, axis, keepdims=True)
         output = np.clip(output, backend.epsilon(), 1.0 - backend.epsilon())
         log_prob = np.log(output)
-    return -np.sum(target * log_prob, axis=axis)
+    return (-np.sum(target * log_prob, axis=axis)).astype(dtype)
 
 
 def sparse_categorical_crossentropy(target, output, from_logits=False, axis=-1):
     target = np.array(target, dtype="int32")
     output = np.array(output)
+    if not backend.is_float_dtype(output.dtype):
+        output = cast(output, backend.floatx())
+    dtype = output.dtype
     if len(target.shape) == len(output.shape) and target.shape[-1] == 1:
         target = np.squeeze(target, axis=-1)
 
@@ -947,8 +954,8 @@ def sparse_categorical_crossentropy(target, output, from_logits=False, axis=-1):
         output = output / np.sum(output, axis, keepdims=True)
         output = np.clip(output, backend.epsilon(), 1.0 - backend.epsilon())
         log_prob = np.log(output)
-    target = one_hot(target, output.shape[axis], axis=axis)
-    return -np.sum(target * log_prob, axis=axis)
+    target = one_hot(target, output.shape[axis], axis=axis, dtype=dtype)
+    return (-np.sum(target * log_prob, axis=axis)).astype(dtype)
 
 
 def binary_crossentropy(target, output, from_logits=False):

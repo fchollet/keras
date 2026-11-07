@@ -3903,6 +3903,89 @@ class NNOpsDtypeTest(testing.TestCase):
             knn.LayerNorm().symbolic_call(inputs, gamma, beta), expected_dtype
         )
 
+    @parameterized.named_parameters(
+        named_product(
+            target_dtype=["int32", "bool"] + FLOAT_DTYPES,
+            output_dtype=FLOAT_DTYPES,
+            from_logits=[True, False],
+        )
+    )
+    def test_categorical_crossentropy(
+        self, target_dtype, output_dtype, from_logits
+    ):
+        target = knp.ones((2, 3), dtype=target_dtype)
+        output = knp.full((2, 3), 0.5, dtype=output_dtype)
+        expected_dtype = output_dtype
+
+        self.assertDType(
+            knn.categorical_crossentropy(
+                target, output, from_logits=from_logits
+            ),
+            expected_dtype,
+        )
+        self.assertDType(
+            knn.CategoricalCrossentropy(from_logits=from_logits).symbolic_call(
+                target, output
+            ),
+            expected_dtype,
+        )
+
+    @parameterized.named_parameters(
+        named_product(output_dtype=FLOAT_DTYPES, from_logits=[True, False])
+    )
+    def test_sparse_categorical_crossentropy(self, output_dtype, from_logits):
+        target = knp.zeros((2,), dtype="int32")
+        output = knp.full((2, 3), 0.5, dtype=output_dtype)
+        expected_dtype = output_dtype
+
+        self.assertDType(
+            knn.sparse_categorical_crossentropy(
+                target, output, from_logits=from_logits
+            ),
+            expected_dtype,
+        )
+        self.assertDType(
+            knn.SparseCategoricalCrossentropy(
+                from_logits=from_logits
+            ).symbolic_call(target, output),
+            expected_dtype,
+        )
+
+    @parameterized.named_parameters(
+        named_product(
+            target_dtype=["int32", "float32", "float64"],
+            output_dtype=["int32", "uint8"],
+            from_logits=[True, False],
+        )
+    )
+    def test_crossentropy_non_float_output(
+        self, target_dtype, output_dtype, from_logits
+    ):
+        target = knp.array([[1, 0, 0]], dtype=target_dtype)
+        labels = knp.array([0], dtype="int32")
+        output = knp.array([[0, 1, 0]], dtype=output_dtype)
+        expected_dtype = backend.floatx()
+        if from_logits:
+            expected = [np.log(2.0 + np.e)]
+        else:
+            expected = [-np.log(backend.epsilon())]
+
+        for fn, op, t in (
+            (knn.categorical_crossentropy, knn.CategoricalCrossentropy, target),
+            (
+                knn.sparse_categorical_crossentropy,
+                knn.SparseCategoricalCrossentropy,
+                labels,
+            ),
+        ):
+            result = fn(t, output, from_logits=from_logits)
+            self.assertDType(result, expected_dtype)
+            self.assertAllClose(result, expected, atol=1e-3, rtol=1e-3)
+            self.assertDType(
+                op(from_logits=from_logits).symbolic_call(t, output),
+                expected_dtype,
+            )
+
 
 class NNOpsBehaviorTest(testing.TestCase):
     def test_logit_recovery_binary_crossentropy(self):
