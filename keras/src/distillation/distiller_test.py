@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 import keras
+from keras.src.distillation.distillation_loss import FeatureDistillation
 from keras.src.distillation.distillation_loss import LogitsDistillation
 from keras.src.distillation.distiller import Distiller
 from keras.src.testing import TestCase
@@ -529,3 +530,293 @@ class TestDistiller(TestCase):
 
         # The core serialization functionality is working
         self.assertTrue(True, "Distiller serialization test passed")
+
+
+@pytest.mark.requires_trainable_backend
+class TestDistillerFeatureExtractionTrainingFlag(TestCase):
+    """Feature extraction must respect the `training` flag of the caller."""
+
+    def _build_distiller(self, make_feature_layer, input_dim=2):
+        def make_model(name):
+            inputs = keras.Input((input_dim,))
+            outputs = make_feature_layer()(inputs)
+            return keras.Model(inputs, outputs, name=name)
+
+        teacher = make_model("teacher")
+        student = make_model("student")
+        # Identical models, so the feature loss is zero in inference mode.
+        student.set_weights(teacher.get_weights())
+        distiller = Distiller(
+            teacher=teacher,
+            student=student,
+            distillation_losses=FeatureDistillation(
+                teacher_layer_name="features",
+                student_layer_name="features",
+            ),
+            student_loss_weight=0.0,
+        )
+        distiller.compile(optimizer="sgd", loss="mse")
+        return distiller, student
+
+    def _make_batch_norm(self):
+        return keras.layers.BatchNormalization(momentum=0.5, name="features")
+
+    def _batch_norm_state(self, student):
+        bn = student.get_layer("features")
+        return (
+            keras.ops.convert_to_numpy(bn.moving_mean).copy(),
+            keras.ops.convert_to_numpy(bn.moving_variance).copy(),
+        )
+
+    def _assert_batch_norm_state_unchanged(self, run_evaluation):
+        distiller, student = self._build_distiller(self._make_batch_norm)
+        x = np.array([[10, 20], [14, 24]], dtype="float32")
+        y = np.zeros((2, 2), dtype="float32")
+        mean_before, variance_before = self._batch_norm_state(student)
+        predictions_before = keras.ops.convert_to_numpy(
+            student(x, training=False)
+        )
+
+        for _ in range(2):  # The state must stay put across repeated calls.
+            distillation_loss = run_evaluation(distiller, x, y)
+            self.assertAllClose(distillation_loss, 0.0)
+            mean_after, variance_after = self._batch_norm_state(student)
+            self.assertAllClose(mean_after, mean_before)
+            self.assertAllClose(variance_after, variance_before)
+
+        self.assertAllClose(
+            keras.ops.convert_to_numpy(student(x, training=False)),
+            predictions_before,
+        )
+
+    def test_evaluate_does_not_update_batch_norm_statistics(self):
+        def run_evaluation(distiller, x, y):
+            results = distiller.evaluate(
+                x, y, batch_size=2, verbose=0, return_dict=True
+            )
+            return results["distillation_loss"]
+
+        self._assert_batch_norm_state_unchanged(run_evaluation)
+
+    def test_test_on_batch_does_not_update_batch_norm_statistics(self):
+        def run_evaluation(distiller, x, y):
+            results = distiller.test_on_batch(x, y, return_dict=True)
+            return results["distillation_loss"]
+
+        self._assert_batch_norm_state_unchanged(run_evaluation)
+
+    def test_evaluate_disables_dropout_in_feature_extraction(self):
+        keras.utils.set_random_seed(0)
+
+        def make_feature_layer():
+            return keras.Sequential(
+                [keras.layers.Dense(4), keras.layers.Dropout(0.5)],
+                name="features",
+            )
+
+        distiller, _ = self._build_distiller(make_feature_layer, input_dim=4)
+        x = np.random.random((8, 4)).astype("float32")
+        y = np.zeros((8, 4), dtype="float32")
+
+        for _ in range(2):  # Dropout must not make the loss non-deterministic.
+            results = distiller.evaluate(
+                x, y, batch_size=8, verbose=0, return_dict=True
+            )
+            self.assertAllClose(results["distillation_loss"], 0.0)
+
+    def test_fit_still_updates_batch_norm_statistics(self):
+        distiller, student = self._build_distiller(self._make_batch_norm)
+        x = np.array([[10, 20], [14, 24]], dtype="float32")
+        y = np.zeros((2, 2), dtype="float32")
+        mean_before, _ = self._batch_norm_state(student)
+
+        distiller.fit(x, y, batch_size=2, epochs=1, verbose=0)
+
+        mean_after, _ = self._batch_norm_state(student)
+        self.assertNotAllClose(mean_after, mean_before)
+
+
+class _CallCounter(keras.layers.Layer):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.call_count = 0
+
+    def call(self, inputs):
+        self.call_count += 1
+        return inputs
+
+
+@pytest.mark.requires_trainable_backend
+class TestDistillerSingleStudentPass(TestCase):
+    """Student model forward pass must run once per training/test step."""
+
+    def test_fit_updates_batch_norm_statistics_once_per_step(self):
+        def make_model(name):
+            inputs = keras.Input((2,))
+            outputs = keras.layers.BatchNormalization(
+                momentum=0.5, name="features"
+            )(inputs)
+            return keras.Model(inputs, outputs, name=name)
+
+        teacher = make_model("teacher")
+        student = make_model("student")
+        student.set_weights(teacher.get_weights())
+
+        distiller = Distiller(
+            teacher=teacher,
+            student=student,
+            distillation_losses=FeatureDistillation(
+                teacher_layer_name="features",
+                student_layer_name="features",
+            ),
+            student_loss_weight=0.0,
+        )
+        distiller.compile(optimizer="sgd", loss="mse")
+
+        x = np.array([[10, 20], [14, 24]], dtype="float32")
+        y = np.zeros((2, 2), dtype="float32")
+        bn = student.get_layer("features")
+
+        # Initial moving mean is [0.0, 0.0]. Batch mean is [12.0, 22.0].
+        # Single EMA update with momentum 0.5:
+        # 0.5 * 0 + 0.5 * [12, 22] = [6.0, 11.0]
+        # Duplicate EMA update gives: 0.5 * 6 + 0.5 * 12 = [9.0, 16.5]
+        distiller.fit(x, y, batch_size=2, epochs=1, verbose=0)
+        mean_after = keras.ops.convert_to_numpy(bn.moving_mean)
+        self.assertAllClose(mean_after, [6.0, 11.0])
+
+    def test_student_runs_once_per_train_and_test_step(self):
+        t_in = keras.Input((2,))
+        t_f = keras.layers.Dense(4, name="features")(t_in)
+        t_out = keras.layers.Dense(2, name="out")(t_f)
+        teacher = keras.Model(t_in, t_out, name="teacher")
+
+        s_in = keras.Input((2,))
+        counter = _CallCounter(name="counter")
+        s_x = counter(s_in)
+        s_f = keras.layers.Dense(4, name="features")(s_x)
+        s_out = keras.layers.Dense(2, name="out")(s_f)
+        student = keras.Model(s_in, s_out, name="student")
+
+        distiller = Distiller(
+            teacher=teacher,
+            student=student,
+            distillation_losses=FeatureDistillation(
+                teacher_layer_name="features",
+                student_layer_name="features",
+            ),
+            student_loss_weight=0.5,
+        )
+        distiller.compile(optimizer="sgd", loss="mse", run_eagerly=True)
+
+        x = np.random.random((2, 2)).astype("float32")
+        y = np.random.random((2, 2)).astype("float32")
+
+        # Warm up to build the model and ignore build calls
+        _ = distiller(x)
+
+        # Train step
+        counter.call_count = 0
+        distiller.fit(x, y, batch_size=2, epochs=1, verbose=0)
+        self.assertEqual(counter.call_count, 1)
+
+        # Test / evaluate step
+        counter.call_count = 0
+        distiller.evaluate(x, y, batch_size=2, verbose=0)
+        self.assertEqual(counter.call_count, 1)
+
+    def test_predictions_and_features_share_one_dropout_mask(self):
+        keras.utils.set_random_seed(0)
+
+        # Feature layer right before output layer ensures features and y_pred
+        # are derived from the exact same Dropout mask.
+        s_in = keras.Input((4,))
+        drop = keras.layers.Dropout(0.5, name="features")(s_in)
+        s_out = keras.layers.Identity()(drop)
+        student = keras.Model(s_in, s_out, name="student")
+
+        t_in = keras.Input((4,))
+        t_out = keras.layers.Dense(4, name="features")(t_in)
+        teacher = keras.Model(t_in, t_out, name="teacher")
+
+        distiller = Distiller(
+            teacher=teacher,
+            student=student,
+            distillation_losses=FeatureDistillation(
+                teacher_layer_name="features",
+                student_layer_name="features",
+            ),
+            student_loss_weight=0.5,
+        )
+        distiller.compile(optimizer="sgd", loss="mse")
+
+        x = np.ones((8, 4), dtype="float32")
+        y = np.zeros((8, 4), dtype="float32")
+
+        distiller.fit(x, y, batch_size=8, epochs=1, verbose=0)
+        self.assertFalse(distiller._student_feature_cache.enabled)
+        self.assertIsNone(distiller._student_feature_cache.features)
+
+    def test_features_are_not_kept_beyond_a_step(self):
+        def make_model(name):
+            inputs = keras.Input((2,))
+            outputs = keras.layers.Dense(2, name="features")(inputs)
+            return keras.Model(inputs, outputs, name=name)
+
+        distiller = Distiller(
+            teacher=make_model("teacher"),
+            student=make_model("student"),
+            distillation_losses=FeatureDistillation(
+                teacher_layer_name="features",
+                student_layer_name="features",
+            ),
+        )
+        distiller.compile(optimizer="sgd", loss="mse")
+        x = np.random.random((4, 2)).astype("float32")
+        y = np.random.random((4, 2)).astype("float32")
+
+        # Step 1: fit
+        distiller.fit(x, y, epochs=1, verbose=0)
+        self.assertFalse(distiller._student_feature_cache.enabled)
+        self.assertIsNone(distiller._student_feature_cache.features)
+
+        # Step 2: evaluate
+        distiller.evaluate(x, y, verbose=0)
+        self.assertFalse(distiller._student_feature_cache.enabled)
+        self.assertIsNone(distiller._student_feature_cache.features)
+
+        # Step 3: predict
+        distiller.predict(x, verbose=0)
+        self.assertFalse(distiller._student_feature_cache.enabled)
+        self.assertIsNone(distiller._student_feature_cache.features)
+
+        # Step 4: direct call
+        _ = distiller(x)
+        self.assertFalse(distiller._student_feature_cache.enabled)
+        self.assertIsNone(distiller._student_feature_cache.features)
+
+    def test_compute_loss_with_external_predictions(self):
+        def make_model(name):
+            inputs = keras.Input((2,))
+            outputs = keras.layers.Dense(2, name="features")(inputs)
+            return keras.Model(inputs, outputs, name=name)
+
+        distiller = Distiller(
+            teacher=make_model("teacher"),
+            student=make_model("student"),
+            distillation_losses=FeatureDistillation(
+                teacher_layer_name="features",
+                student_layer_name="features",
+            ),
+        )
+        distiller.compile(optimizer="sgd", loss="mse")
+
+        x = np.random.random((4, 2)).astype("float32")
+        y = np.random.random((4, 2)).astype("float32")
+        external_y_pred = np.zeros((4, 2), dtype="float32")
+
+        loss = distiller.compute_loss(
+            x=x, y=y, y_pred=external_y_pred, training=True
+        )
+        loss_val = keras.ops.convert_to_numpy(loss)
+        self.assertFalse(np.isnan(loss_val))
