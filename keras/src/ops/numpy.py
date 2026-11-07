@@ -1369,7 +1369,31 @@ def bartlett(x):
             f"Bartlett operation does not support symbolic tensors. "
             f"Received input x = {x} of type {type(x)}"
         )
-    return backend.ops.numpy.bartlett(x)
+    return _bartlett(x)
+
+
+def _bartlett(x):
+    if not config._use_backend_agnostic_ops() and hasattr(
+        backend.ops.numpy, "bartlett"
+    ):
+        return backend.ops.numpy.bartlett(x)
+
+    x = backend.ops.convert_to_tensor(x, dtype=config.floatx())
+    if x == 0:
+        return backend.ops.convert_to_tensor([], dtype=config.floatx())
+    if x == 1:
+        return backend.ops.numpy.ones((1,), dtype=config.floatx())
+
+    n = backend.ops.numpy.arange(x)
+    half = (x - 1) / 2
+
+    window = backend.ops.numpy.where(
+        backend.ops.numpy.less_equal(n, half),
+        2.0 * n / (x - 1),
+        2.0 - 2.0 * n / (x - 1),
+    )
+
+    return window
 
 
 @keras_export(["keras.ops.hamming", "keras.ops.numpy.hamming"])
